@@ -1,0 +1,71 @@
+{
+  "name": "redmine-desktop",
+  "productName": "Redmine Desktop",
+  "version": "1.0.8",
+  "author": "wenhuxian",
+  "license": "MIT",
+  "description": "Cross-platform Redmine client",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build && electron-builder",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@toast-ui/editor": "^3.2.2",
+    "@types/react-window": "^1.8.8",
+    "axios": "^1.6.0",
+    "date-fns": "^2.30.0",
+    "electron-store": "^8.1.0",
+    "marked": "^17.0.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^6.18.0",
+    "react-window": "^2.2.3",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/marked": "^5.0.2",
+    "@types/react": "^18.2.37",
+    "@types/react-dom": "^18.2.15",
+    "@vitejs/plugin-react": "^4.2.0",
+    "concurrently": "^8.2.2",
+    "electron": "^27.0.3",
+    "electron-builder": "^24.6.4",
+    "typescript": "^5.2.2",
+    "vite": "^5.0.0",
+    "vite-plugin-electron": "^0.15.4",
+    "vite-plugin-electron-renderer": "^0.14.5",
+    "wait-on": "^7.1.0"
+  },
+  "build": {
+    "appId": "com.redmine.cross",
+    "productName": "Redmine",
+    "directories": {
+      "output": "release/${version}"
+    },
+    "files": [
+      "dist",
+      "dist-electron"
+    ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg"
+      ]
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

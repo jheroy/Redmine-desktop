@@ -1,0 +1,2188 @@
+import React, { useState, useMemo, useEffect, useCallback, useRef, useDeferredValue } from 'react';
+import { useAppViewModel } from './hooks/useAppViewModel';
+import { Issue, IssueJournal } from './models/redmine';
+import { format } from 'date-fns';
+import { AuthenticatedImage } from './components/AuthenticatedImage';
+import { RichEditor } from './components/RichEditor';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { marked } from 'marked';
+
+
+const MemoIssueItem = React.memo(({
+    issue,
+    isSelected,
+    onSelect,
+    onUpdateStatus,
+    onUpdatePriority,
+    onUpdateVersion,
+    onUpdateAssignee,
+    statusList,
+    priorityList,
+    versionList,
+    memberList,
+    isFollowed,
+    onToggleFollow
+}: {
+    issue: Issue,
+    isSelected: boolean,
+    onSelect: (id: number) => void,
+    onUpdateStatus: (id: number, statusId: number) => void,
+    onUpdatePriority: (id: number, priorityId: number) => void,
+    onUpdateVersion: (id: number, versionId: string) => void,
+    onUpdateAssignee: (id: number, assigneeId: string) => void,
+    statusList: any[],
+    priorityList: any[],
+    versionList: any[],
+    memberList: any[],
+    isFollowed: boolean,
+    onToggleFollow: (id: number) => void
+}) => {
+    return (
+        <div className={`issue-item ${isSelected ? 'selected' : ''}`} onClick={() => onSelect(issue.id)} style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 10, position: 'relative' }}>
+            <div className="issue-icon-circle" style={{
+                borderColor: issue.status.name.includes('开发完成') ? '#30d158' : issue.status.name.includes('验证完成') ? 'var(--text-secondary)' : '#ff453a',
+                width: 18, height: 18, fontSize: 9, flexShrink: 0,
+                color: issue.status.name.includes('开发完成') ? '#30d158' : issue.status.name.includes('验证完成') ? 'var(--text-secondary)' : '#ff453a'
+            }}>
+                {(issue.status.name.includes('开发完成') || issue.status.name.includes('验证完成')) ? '✓' : ''}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="issue-subject" style={{
+                    fontSize: 13,
+                    color: issue.status.name.includes('验证完成') ? 'var(--text-secondary)' : 'var(--text-primary)',
+                    textDecoration: issue.status.name.includes('验证完成') ? 'line-through' : 'none',
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+                }}>{issue.subject}</div>
+                <div className="issue-meta" style={{ fontSize: 10, marginTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'var(--text-secondary)' }}>
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        <span style={{ background: 'rgba(255,69,58,0.15)', borderRadius: 8, padding: '1px 6px', fontSize: 10, color: '#ff453a', position: 'relative', fontWeight: 500, border: '1px solid rgba(255,69,58,0.3)' }}>
+                            {issue.status.name}
+                            <select value={issue.status.id} onClick={e => e.stopPropagation()} onChange={e => onUpdateStatus(issue.id, parseInt(e.target.value))} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}>
+                                {statusList.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </select>
+                            <span style={{ marginLeft: 3, fontSize: 10 }}>⌄</span>
+                        </span>
+                        <span>•</span>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: 10, position: 'relative' }}>
+                            {issue.priority.name}
+                            <select value={issue.priority.id} onClick={e => e.stopPropagation()} onChange={e => onUpdatePriority(issue.id, parseInt(e.target.value))} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}>
+                                {priorityList.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>
+                            <span style={{ marginLeft: 3, fontSize: 10, color: 'var(--text-secondary)' }}>⌄</span>
+                        </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ color: 'var(--text-secondary)' }}>▷</span>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: 10, position: 'relative' }}>
+                            {issue.fixed_version?.name || '-'}
+                            <select value={issue.fixed_version?.id || ''} onClick={e => e.stopPropagation()} onChange={e => onUpdateVersion(issue.id, e.target.value)} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}>
+                                <option value="">-</option>
+                                {versionList.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                            </select>
+                            <span style={{ marginLeft: 3, fontSize: 10, color: 'var(--text-secondary)' }}>⌄</span>
+                        </span>
+                        <span style={{ color: 'var(--text-secondary)', marginLeft: 8 }}>👤</span>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: 10, position: 'relative' }}>
+                            {issue.assigned_to?.name || '-'}
+                            <select value={issue.assigned_to?.id || ''} onClick={e => e.stopPropagation()} onChange={e => onUpdateAssignee(issue.id, e.target.value)} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}>
+                                <option value="">-</option>
+                                {(() => {
+                                    // Group members by their groups (roles)
+                                    const grouped: Record<string, { id: number; name: string }[]> = {};
+                                    const noGroup: { id: number; name: string }[] = [];
+                                    memberList.forEach((m: any) => {
+                                        if (m.groups && m.groups.length > 0) {
+                                            const group = m.groups[0];
+                                            if (!grouped[group]) grouped[group] = [];
+                                            grouped[group].push({ id: m.id, name: m.name });
+                                        } else {
+                                            noGroup.push({ id: m.id, name: m.name });
+                                        }
+                                    });
+                                    const sortedGroups = Object.keys(grouped).sort();
+                                    if (sortedGroups.length === 0) {
+                                        return memberList.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>);
+                                    }
+                                    return (
+                                        <>
+                                            {sortedGroups.map(g => (
+                                                <optgroup key={g} label={g}>
+                                                    {grouped[g].sort((a, b) => a.name.localeCompare(b.name)).map(m => (
+                                                        <option key={m.id} value={m.id}>{m.name}</option>
+                                                    ))}
+                                                </optgroup>
+                                            ))}
+                                            {noGroup.length > 0 && (
+                                                <optgroup label="其他">
+                                                    {noGroup.sort((a, b) => a.name.localeCompare(b.name)).map(m => (
+                                                        <option key={m.id} value={m.id}>{m.name}</option>
+                                                    ))}
+                                                </optgroup>
+                                            )}
+                                        </>
+                                    );
+                                })()}
+                            </select>
+                            <span style={{ marginLeft: 3, fontSize: 10, color: 'var(--text-secondary)' }}>⌄</span>
+                        </span>
+                    </div>
+                </div>
+            </div>
+            {/* Follow Button (Eye Icon) */}
+            <div
+                className="follow-button"
+                onClick={(e) => { e.stopPropagation(); onToggleFollow(issue.id); }}
+                style={{
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: isFollowed ? '#0c66ff' : 'var(--text-secondary)',
+                    opacity: isFollowed ? 1 : 0.3,
+                    transition: 'all 0.2s',
+                    padding: '4px',
+                    borderRadius: '4px'
+                }}
+                onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                onMouseLeave={e => { if (!isFollowed) e.currentTarget.style.opacity = '0.3'; }}
+                title={isFollowed ? '取消关注' : '添加关注'}
+            >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </div>
+        </div>
+    );
+}, (prevProps, nextProps) => {
+    // Custom comparison: only re-render if these specific props changed
+    return (
+        prevProps.isSelected === nextProps.isSelected &&
+        prevProps.issue.id === nextProps.issue.id &&
+        prevProps.issue.subject === nextProps.issue.subject &&
+        prevProps.issue.status.id === nextProps.issue.status.id &&
+        prevProps.issue.priority.id === nextProps.issue.priority.id &&
+        prevProps.issue.fixed_version?.id === nextProps.issue.fixed_version?.id &&
+        prevProps.issue.assigned_to?.id === nextProps.issue.assigned_to?.id &&
+        prevProps.statusList === nextProps.statusList &&
+        prevProps.priorityList === nextProps.priorityList &&
+        prevProps.versionList === nextProps.versionList &&
+        prevProps.memberList === nextProps.memberList &&
+        prevProps.isFollowed === nextProps.isFollowed
+    );
+});
+
+const NoteEditor: React.FC<{ issueId: number, onAddNote: (id: number, text: string) => Promise<void> }> = ({ issueId, onAddNote }) => {
+    const [noteText, setNoteText] = useState('');
+
+    const handleSend = async () => {
+        if (noteText.trim()) {
+            await onAddNote(issueId, noteText.trim());
+            setNoteText('');
+        }
+    };
+
+    return (
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '20px 30px', background: 'var(--editor-bg)', backdropFilter: 'blur(20px)', borderTop: '1px solid var(--editor-border)', zIndex: 10 }}>
+            <div style={{ position: 'relative' }}>
+                <textarea
+                    className="note-input"
+                    value={noteText}
+                    onChange={e => setNoteText(e.target.value)}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' && e.shiftKey) {
+                            e.preventDefault();
+                            handleSend();
+                        }
+                    }}
+                    placeholder="Add a note... (Shift + Enter to send)"
+                    style={{ width: '100%', height: 44, background: 'var(--input-bg)', border: '1px solid var(--input-border)', borderRadius: 12, padding: '12px 50px 12px 15px', color: 'var(--text-primary)', resize: 'none', fontSize: 13, transition: 'all 0.2s' }}
+                    onFocus={e => (e.target as any).style.height = '100px'}
+                    onBlur={e => { if (!noteText) (e.target as any).style.height = '44px' }}
+                />
+                <button
+                    onClick={handleSend}
+                    style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: '#0c66ff', border: 'none', width: 28, height: 28, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', cursor: 'pointer', transition: 'all 0.12s' }}
+                    onMouseDown={e => { (e.currentTarget as any).style.transform = 'translateY(-50%) scale(0.95)' }}
+                    onMouseUp={e => { (e.currentTarget as any).style.transform = 'translateY(-50%) scale(1)' }}
+                >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    );
+};
+
+const App: React.FC = () => {
+    const vm = useAppViewModel();
+    const [selectedIssueId, setSelectedIssueId] = useState<number | null>(null);
+
+    // Track which projects are expanded (independent toggle)
+    const [expandedProjects, setExpandedProjects] = useState<Record<number, boolean>>(() => {
+        const saved = localStorage.getItem('expandedProjects');
+        return saved ? JSON.parse(saved) : {};
+    });
+
+    // Track which project's "Others" section is expanded
+    const [expandedOthers, setExpandedOthers] = useState<Record<number, boolean>>({});
+
+    // Version editing state
+    const [editingVersionId, setEditingVersionId] = useState<number | null>(null);
+    const [editVersionName, setEditVersionName] = useState('');
+    const [showSettings, setShowSettings] = useState(false);
+    const [newTaskSubject, setNewTaskSubject] = useState('');
+
+    // Track which groups are collapsed in the issue list
+    const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() => {
+        const saved = localStorage.getItem('collapsedGroups');
+        return saved ? JSON.parse(saved) : {};
+    });
+
+    // Selection Indicator State
+    const listRef = useRef<HTMLDivElement>(null);
+    const [indicatorStyle, setIndicatorStyle] = useState<React.CSSProperties>({ opacity: 0 });
+
+    const sidebarRef = useRef<HTMLDivElement>(null);
+    const [sidebarIndicatorStyle, setSidebarIndicatorStyle] = useState<React.CSSProperties>({ opacity: 0 });
+
+    // Defer groupedIssues update to avoid blocking UI during version switch
+    const deferredGroupedIssues = useDeferredValue(vm.groupedIssues);
+    const isVersionSwitching = deferredGroupedIssues !== vm.groupedIssues;
+
+    // Track previous version to detect version switches
+    const prevVersionIdRef = useRef<number | null>(vm.selectedVersionId);
+    const shouldScrollToSelectedRef = useRef(false);
+
+    // Resizable pane widths
+    // Sidebar uses fixed width, list uses ratio of remaining space
+    const [sidebarWidth, setSidebarWidth] = useState(() => parseInt(localStorage.getItem('sidebarWidth') || '220'));
+    const [listRatio, setListRatio] = useState(() => parseFloat(localStorage.getItem('listRatio') || '0.35')); // 35% of remaining space
+    const [resizingPane, setResizingPane] = useState<'sidebar' | 'list' | null>(null);
+    const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+
+    // Listen for window resize
+    useEffect(() => {
+        const handleResize = () => setWindowWidth(window.innerWidth);
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
+
+    // Calculate actual list width from ratio
+    const remainingWidth = windowWidth - sidebarWidth - 8; // 8px for resize handles
+    const listWidth = Math.max(300, Math.min(800, Math.round(remainingWidth * listRatio)));
+
+    // Detect version switch for scroll behavior
+    useEffect(() => {
+        if (prevVersionIdRef.current !== vm.selectedVersionId) {
+            shouldScrollToSelectedRef.current = true;
+            prevVersionIdRef.current = vm.selectedVersionId;
+        }
+    }, [vm.selectedVersionId]);
+
+    useEffect(() => {
+        if (selectedIssueId === null) {
+            setIndicatorStyle({ opacity: 0 });
+            return;
+        }
+
+        let rafId: number;
+
+        const update = () => {
+            if (!listRef.current) return;
+            const selectedItem = listRef.current.querySelector('.issue-item.selected') as HTMLElement;
+
+            if (selectedItem) {
+                const containerRect = listRef.current.getBoundingClientRect();
+                const itemRect = selectedItem.getBoundingClientRect();
+                const top = itemRect.top - containerRect.top + listRef.current.scrollTop;
+                const height = itemRect.height;
+
+                if (height > 0) {
+                    setIndicatorStyle({
+                        transform: `translateY(${top}px)`,
+                        height,
+                        opacity: 1
+                    });
+
+                    // Scroll to selected item if version just switched
+                    if (shouldScrollToSelectedRef.current) {
+                        shouldScrollToSelectedRef.current = false;
+                        selectedItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
+                }
+            } else {
+                setIndicatorStyle({ opacity: 0 });
+            }
+        };
+
+        let count = 0;
+        const sync = () => {
+            update();
+            if (count < 15) {
+                count++;
+                rafId = requestAnimationFrame(sync);
+            }
+        };
+        rafId = requestAnimationFrame(sync);
+
+        return () => {
+            if (rafId) cancelAnimationFrame(rafId);
+        };
+    }, [selectedIssueId, collapsedGroups, windowWidth, listWidth, sidebarWidth]); // Updated deps
+
+    // Track if sidebar indicator has been initialized
+    const [sidebarIndicatorInitialized, setSidebarIndicatorInitialized] = useState(false);
+
+    // Update sidebar indicator position
+    const updateSidebarIndicator = useCallback(() => {
+        if (!sidebarRef.current) return;
+
+        const update = () => {
+            if (!sidebarRef.current) return;
+            const selectedItem = sidebarRef.current.querySelector('.sidebar-item.selected') as HTMLElement;
+            if (selectedItem) {
+                // Use transform instead of top/left for GPU-accelerated animation
+                setSidebarIndicatorStyle({
+                    transform: `translate(${selectedItem.offsetLeft}px, ${selectedItem.offsetTop}px)`,
+                    width: selectedItem.offsetWidth,
+                    height: selectedItem.offsetHeight,
+                    opacity: 1
+                });
+            } else {
+                setSidebarIndicatorStyle({ opacity: 0 });
+            }
+        };
+
+        // Multiple frames to ensure smooth layout transitions during resize or expansion
+        let count = 0;
+        const sync = () => {
+            update();
+            if (count < 15) {
+                count++;
+                requestAnimationFrame(sync);
+            }
+        };
+        requestAnimationFrame(sync);
+    }, []);
+
+    useEffect(() => {
+        const timer = setTimeout(updateSidebarIndicator, 10); // Reduced delay for faster response
+        return () => clearTimeout(timer);
+    }, [vm.selectedProjectId, vm.selectedVersionId, expandedProjects, vm.projects, vm.projectVersionsMap, updateSidebarIndicator, windowWidth, sidebarWidth]);
+
+    useEffect(() => {
+        const handleGlobalClick = (e: MouseEvent) => {
+            const dropdown = document.getElementById('watcher-filter-dropdown');
+            if (dropdown && dropdown.style.display === 'block') {
+                const target = e.target as HTMLElement;
+                if (!dropdown.contains(target) && !target.closest('.watcher-filter-trigger')) {
+                    dropdown.style.display = 'none';
+                }
+            }
+        };
+        document.addEventListener('mousedown', handleGlobalClick);
+        (window as any).toggleWatcherFilter = () => {
+            const dropdown = document.getElementById('watcher-filter-dropdown');
+            if (dropdown) {
+                dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+            }
+        };
+        return () => {
+            document.removeEventListener('mousedown', handleGlobalClick);
+            delete (window as any).toggleWatcherFilter;
+        };
+    }, []);
+
+    // Initialize sidebar indicator after data loads
+    useEffect(() => {
+        if (!vm.isLoading && vm.projects.length > 0 && !sidebarIndicatorInitialized) {
+            // Wait for DOM to be ready after data loads
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    updateSidebarIndicator();
+                    setSidebarIndicatorInitialized(true);
+                });
+            });
+        }
+    }, [vm.isLoading, vm.projects, sidebarIndicatorInitialized, updateSidebarIndicator]);
+
+    // Image lightbox state
+    const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+    const [lightboxScale, setLightboxScale] = useState(1);
+    const [lightboxOffset, setLightboxOffset] = useState({ x: 0, y: 0 });
+    const [isDragging, setIsDragging] = useState(false);
+    const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+
+    // Calculate actual list width from ratio (Moved up)
+
+
+    // Quick add task version - defaults to selected version or highest numbered version
+    const defaultQuickAddVersion = useMemo(() => {
+        if (vm.selectedVersionId) return vm.selectedVersionId;
+        if (vm.selectedProjectId === -1 || vm.selectedProjectId === null) return null;
+        const versions = vm.projectVersionsMap[vm.selectedProjectId] || [];
+        // Find highest version that starts with a digit
+        const numberedVersions = versions.filter((v: { name: string }) => /^\d/.test(v.name));
+        if (numberedVersions.length === 0) return versions[0]?.id || null;
+        // Sort by version name descending (assuming semantic versioning like 0.6.0 > 0.5.0)
+        numberedVersions.sort((a: { name: string }, b: { name: string }) => b.name.localeCompare(a.name, undefined, { numeric: true }));
+        return numberedVersions[0]?.id || null;
+    }, [vm.selectedVersionId, vm.selectedProjectId, vm.projectVersionsMap]);
+
+    const [quickAddVersionId, setQuickAddVersionId] = useState<number | null>(null);
+    const [quickAddAssigneeId, setQuickAddAssigneeId] = useState<number | null>(null);
+
+    // Default quick add assignee to current user
+    useEffect(() => {
+        if (vm.currentUser && quickAddAssigneeId === null) {
+            setQuickAddAssigneeId(vm.currentUser.id);
+        }
+    }, [vm.currentUser]);
+
+
+    // New version dialog state
+    const [newVersionProjectId, setNewVersionProjectId] = useState<number | null>(null);
+    const [newVersionName, setNewVersionName] = useState('');
+
+    // Delete confirmation state
+    const [deleteVersionConfirm, setDeleteVersionConfirm] = useState<{ projectId: number; versionId: number; name: string } | null>(null);
+    const [deleteIssueConfirm, setDeleteIssueConfirm] = useState<number | null>(null);
+
+    // Inline editing state
+    const [editingTitle, setEditingTitle] = useState(false);
+    const [editingDescription, setEditingDescription] = useState(false);
+    const [editTitleValue, setEditTitleValue] = useState('');
+    const [editDescriptionValue, setEditDescriptionValue] = useState('');
+    const [pendingUploads, setPendingUploads] = useState<{ token: string, filename: string, content_type: string, tempUrl?: string }[]>([]);
+
+    // Refresh button state
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [isUploading, setIsUploading] = useState(false);
+    const issueListRef = React.useRef<HTMLDivElement>(null);
+    const detailPaneRef = React.useRef<HTMLElement>(null);
+    // Cache scroll position per issue to restore after refresh
+    const detailScrollPositionRef = React.useRef<Map<number, number>>(new Map());
+
+    // Sync quickAddVersionId with default when project/version changes
+    useEffect(() => {
+        setQuickAddVersionId(defaultQuickAddVersion);
+    }, [defaultQuickAddVersion]);
+
+    // Persist expanded projects state
+    useEffect(() => {
+        localStorage.setItem('expandedProjects', JSON.stringify(expandedProjects));
+    }, [expandedProjects]);
+
+    // Persistence for draft settings in the modal to avoid reset on re-renders
+    const [draftURL, setDraftURL] = useState(localStorage.getItem('redmineURL') || 'http://192.168.0.191:9999');
+    const [draftKey, setDraftKey] = useState(localStorage.getItem('redmineAPIKey') || '');
+
+    // Sync drafts if VM values change (e.g. from background tasks or initial load correction)
+    useEffect(() => {
+        if (vm.redmineURL) setDraftURL(vm.redmineURL);
+        if (vm.redmineAPIKey) setDraftKey(vm.redmineAPIKey);
+    }, [vm.redmineURL, vm.redmineAPIKey]);
+
+    // Persistence for collapsed groups
+    useEffect(() => {
+        localStorage.setItem('collapsedGroups', JSON.stringify(collapsedGroups));
+    }, [collapsedGroups]);
+
+    const toggleGroup = useCallback((groupName: string) => {
+        setCollapsedGroups(prev => ({
+            ...prev,
+            [groupName]: !prev[groupName]
+        }));
+    }, []);
+
+    const downloadFile = async (url: string, filename: string) => {
+        try {
+            const blob = await vm.fetchImageBlob(url);
+            if (!blob) throw new Error('Failed to fetch file content');
+            const arrayBuffer = await blob.arrayBuffer();
+            await (window as any).ipcRenderer.invoke('save-file', {
+                data: new Uint8Array(arrayBuffer),
+                filename
+            });
+        } catch (e: any) {
+            console.error('Download failed', e);
+            alert('下载失败: ' + e.message);
+        }
+    };
+
+    const handleUpdateStatus = useCallback((id: number, sid: number) => vm.updateIssue(id, { status_id: sid }), [vm.updateIssue]);
+    const handleUpdatePriority = useCallback((id: number, pid: number) => vm.updateIssue(id, { priority_id: pid }), [vm.updateIssue]);
+    const handleUpdateVersion = useCallback((id: number, vid: string) => vm.updateIssue(id, { fixed_version_id: vid || '' }), [vm.updateIssue]);
+    const handleUpdateAssignee = useCallback((id: number, aid: string) => vm.updateIssue(id, { assigned_to_id: aid || '' }), [vm.updateIssue]);
+    const handleSelectIssue = useCallback((id: number) => setSelectedIssueId(id), []);
+
+    // Stable references for MemoIssueItem props to prevent unnecessary re-renders
+    const stableStatusList = useMemo(() => vm.issueStatuses, [vm.issueStatuses]);
+    const stablePriorityList = useMemo(() => vm.issuePriorities, [vm.issuePriorities]);
+    const stableMemberList = useMemo(() => vm.globalMembers, [vm.globalMembers]);
+    // Cache version lists per project
+    const stableVersionListCache = useMemo(() => {
+        const cache: Record<number, any[]> = {};
+        Object.entries(vm.projectVersionsMap).forEach(([k, v]) => {
+            cache[parseInt(k)] = v;
+        });
+        return cache;
+    }, [vm.projectVersionsMap]);
+    // Cache member lists per project
+    const stableMemberListCache = useMemo(() => {
+        const cache: Record<number, any[]> = {};
+        Object.entries(vm.projectMembersMap).forEach(([k, v]) => {
+            cache[parseInt(k)] = v;
+        });
+        return cache;
+    }, [vm.projectMembersMap]);
+    // Get current project's member list or fall back to global
+    const currentProjectMembers = useMemo(() => {
+        if (vm.selectedProjectId && vm.selectedProjectId > 0) {
+            return stableMemberListCache[vm.selectedProjectId] || stableMemberList;
+        }
+        return stableMemberList;
+    }, [vm.selectedProjectId, stableMemberListCache, stableMemberList]);
+    // Get members for selected issue's project (for detail view)
+    const getProjectMembers = (projectId: number | undefined) => {
+        if (projectId && stableMemberListCache[projectId]) {
+            return stableMemberListCache[projectId];
+        }
+        return stableMemberList;
+    };
+
+    // Group members by their roles/groups for dropdown display
+    const groupMembersByRole = useCallback((members: { id: number; name: string; groups?: string[] }[]) => {
+        const grouped: Record<string, { id: number; name: string }[]> = {};
+        const noGroup: { id: number; name: string }[] = [];
+
+        members.forEach(m => {
+            if (m.groups && m.groups.length > 0) {
+                // Add to first group (primary role)
+                const primaryGroup = m.groups[0];
+                if (!grouped[primaryGroup]) grouped[primaryGroup] = [];
+                grouped[primaryGroup].push({ id: m.id, name: m.name });
+            } else {
+                noGroup.push({ id: m.id, name: m.name });
+            }
+        });
+
+        // Sort groups and members within groups
+        const sortedGroups = Object.keys(grouped).sort((a, b) => a.localeCompare(b));
+        sortedGroups.forEach(g => grouped[g].sort((a, b) => a.name.localeCompare(b.name)));
+        noGroup.sort((a, b) => a.name.localeCompare(b.name));
+
+        return { grouped, noGroup, sortedGroups };
+    }, []);
+
+    // Render grouped member options with optgroup
+    const renderGroupedMemberOptions = useCallback((members: { id: number; name: string; groups?: string[] }[], excludeIds?: number[]) => {
+        const { grouped, noGroup, sortedGroups } = groupMembersByRole(members);
+        const filtered = excludeIds ? (m: { id: number }) => !excludeIds.includes(m.id) : () => true;
+
+        const hasGroups = sortedGroups.length > 0;
+
+        if (!hasGroups) {
+            // No groups, just render flat list
+            return members.filter(filtered).map(m => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+            ));
+        }
+
+        return (
+            <>
+                {sortedGroups.map(groupName => {
+                    const groupMembers = grouped[groupName].filter(filtered);
+                    if (groupMembers.length === 0) return null;
+                    return (
+                        <optgroup key={groupName} label={groupName}>
+                            {groupMembers.map(m => (
+                                <option key={m.id} value={m.id}>{m.name}</option>
+                            ))}
+                        </optgroup>
+                    );
+                })}
+                {noGroup.filter(filtered).length > 0 && (
+                    <optgroup label="其他">
+                        {noGroup.filter(filtered).map(m => (
+                            <option key={m.id} value={m.id}>{m.name}</option>
+                        ))}
+                    </optgroup>
+                )}
+            </>
+        );
+    }, [groupMembersByRole]);
+
+    // Listen for 'show-settings' from main process
+    useEffect(() => {
+        const handler = () => setShowSettings(true);
+        (window as any).ipcRenderer.on('show-settings', handler);
+        return () => {
+            (window as any).ipcRenderer.off('show-settings', handler);
+        };
+    }, []);
+
+    // Manage issue selection automatically when context (project/version) changes
+    useEffect(() => {
+        const issues = vm.groupedIssues;
+        const keys = issues.sortedKeys;
+        const allFiltered = keys.flatMap(k => issues.groups[k]);
+
+        if (allFiltered.length === 0) return;
+
+        // If something is selected, check if it's still valid
+        if (selectedIssueId) {
+            const stillValid = allFiltered.some(i => i.id === selectedIssueId);
+            if (stillValid) return; // All good
+        }
+
+        // If we reach here, either nothing is selected, or the selection is invalid
+        // 1. Try last-selected for this version
+        if (vm.selectedVersionId) {
+            const lastId = versionLastSelectedMap[vm.selectedVersionId];
+            if (lastId && allFiltered.some(i => i.id === lastId)) {
+                setSelectedIssueId(lastId);
+                return;
+            }
+        }
+
+        // 2. Default to the first available issue
+        const firstIssue = allFiltered[0];
+        if (firstIssue) {
+            setSelectedIssueId(firstIssue.id);
+        }
+    }, [vm.selectedProjectId, vm.selectedVersionId, vm.groupedIssues]);
+
+    // Track last selected issue per version
+    const [versionLastSelectedMap, setVersionLastSelectedMap] = useState<Record<number, number>>(() => {
+        const saved = localStorage.getItem('versionLastSelectedMap');
+        return saved ? JSON.parse(saved) : {};
+    });
+
+    // Update last selected map when an issue is selected
+    useEffect(() => {
+        if (selectedIssueId && vm.selectedVersionId) {
+            setVersionLastSelectedMap(prev => {
+                const next = { ...prev, [vm.selectedVersionId!]: selectedIssueId };
+                localStorage.setItem('versionLastSelectedMap', JSON.stringify(next));
+                return next;
+            });
+        }
+    }, [selectedIssueId, vm.selectedVersionId]);
+
+
+    // Cache ref for selectedIssue to avoid unnecessary re-renders during background refresh
+    const selectedIssueCacheRef = React.useRef<Issue | undefined>(undefined);
+
+    // Deep comparison function for Issue objects
+    const issueEquals = (a: Issue | undefined, b: Issue | undefined): boolean => {
+        if (a === b) return true;
+        if (!a || !b) return false;
+        // Compare key fields that would affect rendering
+        return a.id === b.id &&
+            a.updated_on === b.updated_on &&
+            a.subject === b.subject &&
+            a.description === b.description &&
+            a.status?.id === b.status?.id &&
+            a.priority?.id === b.priority?.id &&
+            a.assigned_to?.id === b.assigned_to?.id &&
+            a.fixed_version?.id === b.fixed_version?.id &&
+            a.journals?.length === b.journals?.length &&
+            a.attachments?.length === b.attachments?.length &&
+            a.watchers?.length === b.watchers?.length;
+    };
+
+    const selectedIssue = useMemo(() => {
+        const newIssue = vm.allIssues.find((i: Issue) => i.id === selectedIssueId);
+        // Only update cache if data actually changed
+        if (!issueEquals(selectedIssueCacheRef.current, newIssue)) {
+            selectedIssueCacheRef.current = newIssue;
+        }
+        return selectedIssueCacheRef.current;
+    }, [vm.allIssues, selectedIssueId]);
+
+    const processedDescription = useMemo(() => {
+        if (!selectedIssue) return '';
+        let text = selectedIssue.description || '';
+        // 1. Convert Textile images !url! to Markdown ![](url)
+        let processed = text.replace(/!([^!\s]+(?:\.[a-z0-9]+)+)!/gi, '![]($1)');
+
+        // 2. Resolve filenames to absolute Redmine URLs with API key
+        processed = processed.replace(/!\[(.*?)\]\((.*?)\)/g, (match, alt, url) => {
+            let finalUrl = decodeURIComponent(url);
+            if (!finalUrl.includes('/') && selectedIssue?.attachments) {
+                const attachment = selectedIssue.attachments.find(a => a.filename === finalUrl);
+                if (attachment) {
+                    finalUrl = attachment.content_url;
+                }
+            }
+
+            if (finalUrl.startsWith('http') && !finalUrl.includes('key=')) {
+                const connector = finalUrl.includes('?') ? '&' : '?';
+                finalUrl = `${finalUrl}${connector}key=${vm.redmineAPIKey}`;
+            }
+            // Re-encode spaces for the editor
+            const encodedUrl = finalUrl.includes(' ') ? finalUrl.replace(/ /g, '%20') : finalUrl;
+            return `![${alt}](${encodedUrl})`;
+        });
+        return processed;
+    }, [selectedIssue?.description, selectedIssue?.attachments, vm.redmineAPIKey]);
+
+    useEffect(() => {
+        if (selectedIssueId) {
+            vm.fetchIssueDetail(selectedIssueId);
+        }
+    }, [selectedIssueId]);
+
+    // Save scroll position when scrolling in detail pane
+    useEffect(() => {
+        const el = detailPaneRef.current;
+        if (!el || !selectedIssueId) return;
+
+        const handleScroll = () => {
+            detailScrollPositionRef.current.set(selectedIssueId, el.scrollTop);
+        };
+
+        el.addEventListener('scroll', handleScroll, { passive: true });
+        return () => el.removeEventListener('scroll', handleScroll);
+    }, [selectedIssueId]);
+
+    // Restore scroll position when selectedIssue content stabilizes
+    useEffect(() => {
+        if (!selectedIssue || !detailPaneRef.current) return;
+
+        const savedPosition = detailScrollPositionRef.current.get(selectedIssue.id);
+        if (savedPosition !== undefined && savedPosition > 0) {
+            // Use requestAnimationFrame to ensure DOM is ready
+            requestAnimationFrame(() => {
+                if (detailPaneRef.current) {
+                    detailPaneRef.current.scrollTop = savedPosition;
+                }
+            });
+        }
+    }, [selectedIssue]);
+
+    // Lightbox keyboard and wheel handlers
+    useEffect(() => {
+        if (!lightboxImage) return;
+
+        const handleKeyDown = (e: KeyboardEvent) => {
+            const step = 50;
+            if (e.key === 'Escape') {
+                setLightboxImage(null);
+                setLightboxOffset({ x: 0, y: 0 });
+                setLightboxScale(1);
+            } else if (e.key === '+' || e.key === '=' || e.key === '.') {
+                setLightboxScale(s => Math.min(4, s + 0.25));
+            } else if (e.key === '-' || e.key === ',') {
+                setLightboxScale(s => Math.max(0.25, s - 0.25));
+            } else if (e.key === '0') {
+                setLightboxScale(1);
+                setLightboxOffset({ x: 0, y: 0 });
+            } else if (e.key === 'h' || e.key === 'ArrowLeft') {
+                setLightboxOffset(o => ({ ...o, x: o.x - step }));
+            } else if (e.key === 'l' || e.key === 'ArrowRight') {
+                setLightboxOffset(o => ({ ...o, x: o.x + step }));
+            } else if (e.key === 'k' || e.key === 'ArrowUp') {
+                setLightboxOffset(o => ({ ...o, y: o.y - step }));
+            } else if (e.key === 'j' || e.key === 'ArrowDown') {
+                setLightboxOffset(o => ({ ...o, y: o.y + step }));
+            }
+        };
+
+        const handleWheel = (e: WheelEvent) => {
+            e.preventDefault();
+            if (e.deltaY < 0) {
+                setLightboxScale(s => Math.min(4, s + 0.1));
+            } else {
+                setLightboxScale(s => Math.max(0.25, s - 0.1));
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('wheel', handleWheel, { passive: false });
+
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('wheel', handleWheel);
+        };
+    }, [lightboxImage]);
+
+    // Pane resize handlers
+    useEffect(() => {
+        if (!resizingPane) return;
+
+        const handleMouseMove = (e: MouseEvent) => {
+            if (resizingPane === 'sidebar') {
+                const newWidth = Math.max(120, Math.min(350, e.clientX));
+                setSidebarWidth(newWidth);
+            } else if (resizingPane === 'list') {
+                // Calculate ratio from pixel position
+                const newListWidth = e.clientX - sidebarWidth - 4;
+                const currentRemainingWidth = window.innerWidth - sidebarWidth - 8;
+                const newRatio = Math.max(0.2, Math.min(0.6, newListWidth / currentRemainingWidth));
+                setListRatio(newRatio);
+            }
+        };
+
+        const handleMouseUp = () => {
+            if (resizingPane === 'sidebar') {
+                localStorage.setItem('sidebarWidth', sidebarWidth.toString());
+            } else if (resizingPane === 'list') {
+                localStorage.setItem('listRatio', listRatio.toString());
+            }
+            setResizingPane(null);
+        };
+
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+
+        return () => {
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+        };
+    }, [resizingPane, sidebarWidth, listRatio]);
+
+    const [isEditing, setIsEditing] = useState(false);
+
+    const renderMarkdownWithImages = (text: string | null | undefined) => {
+        if (!text) return null;
+
+        // Pre-process for Textile images (if any left)
+        let processed = text;
+        processed = processed.replace(/!([^!\s]+(?:\.[a-z0-9]+)+)!/gi, (match, url) => {
+            if (!url.includes('/') && url.includes('.')) {
+                return `![${url}](${encodeURIComponent(url)})`;
+            }
+            return match;
+        });
+
+        return (
+            <div className="markdown-body" style={{ color: 'var(--text-primary)', fontSize: 14 }}>
+                <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                        img: ({ node, src, alt, ...props }) => {
+                            let finalSrc = src || '';
+                            const decodedSrc = decodeURIComponent(finalSrc);
+
+                            // Resolve filenames
+                            if (!decodedSrc.includes('/') && selectedIssue?.attachments) {
+                                const attachment = selectedIssue.attachments.find(a => a.filename === decodedSrc);
+                                if (attachment) {
+                                    finalSrc = attachment.content_url;
+                                }
+                            }
+
+                            return (
+                                <div
+                                    style={{
+                                        margin: '20px 0',
+                                        border: `1px solid ${isLightTheme ? 'rgba(0,0,0,0.05)' : '#222'}`,
+                                        borderRadius: 12,
+                                        overflow: 'hidden',
+                                        display: 'inline-block',
+                                        maxWidth: '100%',
+                                        cursor: 'zoom-in',
+                                        boxShadow: isLightTheme ? '0 10px 30px rgba(0,0,0,0.1)' : '0 15px 45px rgba(0,0,0,0.5)',
+                                        transition: 'transform 0.2s ease, box-shadow 0.2s ease'
+                                    }}
+                                    onClick={() => { setLightboxImage(finalSrc); setLightboxScale(1); }}
+                                >
+                                    <AuthenticatedImage
+                                        src={finalSrc}
+                                        alt={alt || ''}
+                                        fetchBlob={(u) => vm.fetchImageBlob(u)}
+                                        style={{ display: 'block', maxWidth: '100%', height: 'auto' }}
+                                    />
+                                </div>
+                            );
+                        },
+                        a: ({ node, href, children, ...props }) => {
+                            const url = href || '';
+                            const decodedUrl = decodeURIComponent(url);
+
+                            if (url.startsWith('attachment:') || (!decodedUrl.includes('/') && selectedIssue?.attachments?.some(a => a.filename === decodedUrl))) {
+                                const filename = decodedUrl.replace('attachment:', '');
+                                const attachment = selectedIssue?.attachments?.find(a => a.filename === filename);
+                                if (attachment) {
+                                    return (
+                                        <div style={{ margin: '5px 0', padding: '8px 12px', background: '#111', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 10, border: '1px solid #222' }}>
+                                            <span style={{ fontSize: 16 }}>📎</span>
+                                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                                <a href="#" onClick={(e) => { e.preventDefault(); downloadFile(attachment.content_url, filename); }} style={{ color: '#0c66ff', textDecoration: 'none', fontSize: 13, fontWeight: 500 }}>{filename}</a>
+                                                <span style={{ fontSize: 10, color: '#444' }}>{(attachment.filesize / 1024).toFixed(1)} KB</span>
+                                            </div>
+                                        </div>
+                                    );
+                                }
+                            }
+                            return <a href={url} onClick={(e) => { e.preventDefault(); (window as any).ipcRenderer.send('open-external', url); }} style={{ color: '#0c66ff', textDecoration: 'none' }}>{children}</a>;
+                        }
+                    }}
+                >
+                    {processed}
+                </ReactMarkdown>
+                <style>{`
+                    .markdown-body h1, .markdown-body h2, .markdown-body h3 { margin-top: 20px; marginBottom: 10px; color: #fff; }
+                    .markdown-body p { margin-bottom: 15px; line-height: 1.6; }
+                    .markdown-body ul, .markdown-body ol { margin-bottom: 15px; padding-left: 20px; }
+                    .markdown-body li { margin-bottom: 5px; }
+                    .markdown-body code { background: #111; padding: 2px 4px; borderRadius: 4px; font-family: monospace; }
+                `}</style>
+            </div>
+        );
+    };
+
+    const SettingsModal = ({ forceShow }: { forceShow?: boolean }) => {
+        return (
+            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+                <div style={{ width: 500, background: 'var(--modal-bg)', padding: '30px', borderRadius: 20, boxShadow: '0 20px 40px rgba(0,0,0,0.5)', border: '1px solid var(--border-color)' }}>
+                    <h2 style={{ marginBottom: 25, fontWeight: 500, color: 'var(--text-primary)' }}>Settings</h2>
+
+                    {vm.errorMessage && (
+                        <div style={{ padding: '10px 15px', background: 'rgba(255,69,58,0.1)', color: '#ff453a', borderRadius: 8, marginBottom: 20, fontSize: 13, border: '1px solid rgba(255,69,58,0.2)' }}>
+                            {vm.errorMessage}
+                        </div>
+                    )}
+
+                    <div style={{ marginBottom: 20 }}>
+                        <h3 style={{ fontSize: 13, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: 15 }}>Redmine Connection</h3>
+                        <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: '15px', alignItems: 'center', marginBottom: 10 }}>
+                            <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>URL</span>
+                            <input type="text" value={draftURL} onChange={e => setDraftURL(e.target.value)} placeholder="https://redmine.example.com" style={{ padding: '8px 12px', background: 'var(--input-bg)', border: '1px solid var(--input-border)', color: 'var(--text-primary)', borderRadius: 6 }} />
+                            <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>API Key</span>
+                            <input type="password" value={draftKey} onChange={e => setDraftKey(e.target.value)} placeholder="Enter API Key" style={{ padding: '8px 12px', background: 'var(--input-bg)', border: '1px solid var(--input-border)', color: 'var(--text-primary)', borderRadius: 6 }} />
+                        </div>
+                    </div>
+                    <div style={{ marginBottom: 20 }}>
+                        <h3 style={{ fontSize: 13, color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: 15 }}>Preferences</h3>
+                        <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: '15px', alignItems: 'center', marginBottom: 10 }}>
+                            <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Refresh</span>
+                            <select value={vm.refreshInterval} onChange={e => vm.setRefreshInterval(parseInt(e.target.value))} style={{ padding: '8px', background: 'var(--input-bg)', border: '1px solid var(--input-border)', color: 'var(--text-primary)', borderRadius: 6 }}>
+                                <option value="60">1 Minute</option>
+                                <option value="300">5 Minutes</option>
+                                <option value="600">10 Minutes</option>
+                            </select>
+                            <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Transparency</span>
+                            <input type="checkbox" checked={vm.enableTransparency} onChange={e => vm.setEnableTransparency(e.target.checked)} style={{ width: 20, height: 20 }} />
+                            <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Theme</span>
+                            <select value={vm.appTheme} onChange={e => vm.setAppTheme(e.target.value)} style={{ padding: '8px', background: 'var(--input-bg)', border: '1px solid var(--input-border)', color: 'var(--text-primary)', borderRadius: 6 }}>
+                                <option value="dark">Dark</option>
+                                <option value="light">Light</option>
+                            </select>
+                            <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Show Badge</span>
+                            <input type="checkbox" checked={vm.showBadge} onChange={e => vm.setShowBadge(e.target.checked)} style={{ width: 20, height: 20 }} />
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 10, marginTop: 30 }}>
+                        <button
+                            disabled={vm.isLoading}
+                            onClick={async () => {
+                                await vm.saveSettings(draftURL, draftKey);
+                                if (!forceShow) setShowSettings(false);
+                            }}
+                            style={{ flex: 1, padding: '12px', background: '#0c66ff', color: 'white', border: 'none', borderRadius: 8, fontWeight: 500, cursor: vm.isLoading ? 'not-allowed' : 'pointer', opacity: vm.isLoading ? 0.7 : 1 }}
+                        >
+                            {vm.isLoading ? 'Connecting...' : 'Save & Connect'}
+                        </button>
+                        {!forceShow && (
+                            <button onClick={() => setShowSettings(false)} style={{ padding: '12px 25px', background: 'var(--button-secondary)', color: 'var(--text-primary)', border: 'none', borderRadius: 8, cursor: 'pointer' }}>Cancel</button>
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    if (!vm.isConfigured) {
+        return (
+            <div className="light-theme" style={{ background: '#f5f5f7', height: '100vh', width: '100vw' }}>
+                <SettingsModal forceShow />
+            </div>
+        );
+    }
+
+    const isLightTheme = vm.appTheme === 'light';
+
+    return (
+        <div className={`app-container ${isLightTheme ? 'light-theme' : ''} ${vm.enableTransparency && !isLightTheme ? 'transparency-enabled' : ''}`} style={{ background: vm.enableTransparency && !isLightTheme ? 'rgba(0,0,0,0.02)' : 'var(--bg-color)' }}>
+            {/* Title bar drag region for window dragging */}
+            <div className="title-bar-drag-region" />
+
+            {showSettings && <SettingsModal />}
+
+            {/* New Version Dialog */}
+            {newVersionProjectId !== null && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+                    <div style={{ background: '#1a1a1a', padding: 20, borderRadius: 12, width: 300 }}>
+                        <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 15 }}>新建版本</div>
+                        <input
+                            type="text"
+                            placeholder="版本名称 (如 0.7.0)"
+                            value={newVersionName}
+                            onChange={e => setNewVersionName(e.target.value)}
+                            autoFocus
+                            onKeyDown={async e => {
+                                if (e.key === 'Enter' && newVersionName.trim()) {
+                                    await vm.createVersion(newVersionProjectId, newVersionName.trim());
+                                    setNewVersionProjectId(null);
+                                    setNewVersionName('');
+                                } else if (e.key === 'Escape') {
+                                    setNewVersionProjectId(null);
+                                }
+                            }}
+                            style={{ width: '100%', padding: 10, background: 'var(--input-bg)', border: '1px solid var(--input-border)', borderRadius: 6, color: 'var(--text-primary)', marginBottom: 15 }}
+                        />
+                        <div style={{ display: 'flex', gap: 10 }}>
+                            <button
+                                onClick={async () => {
+                                    if (newVersionName.trim()) {
+                                        await vm.createVersion(newVersionProjectId, newVersionName.trim());
+                                        setNewVersionProjectId(null);
+                                        setNewVersionName('');
+                                    }
+                                }}
+                                style={{ flex: 1, padding: 10, background: '#0c66ff', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+                            >创建</button>
+                            <button
+                                onClick={() => setNewVersionProjectId(null)}
+                                style={{ padding: '10px 20px', background: '#333', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+                            >取消</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Delete Version Confirmation */}
+            {deleteVersionConfirm && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+                    <div style={{ background: '#1a1a1a', padding: 20, borderRadius: 12, width: 300 }}>
+                        <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 15 }}>删除版本</div>
+                        <div style={{ fontSize: 12, color: '#888', marginBottom: 15 }}>确定要删除版本 "{deleteVersionConfirm.name}" 吗？此操作不可撤销。</div>
+                        <div style={{ display: 'flex', gap: 10 }}>
+                            <button
+                                onClick={async () => {
+                                    await vm.deleteVersion(deleteVersionConfirm.projectId, deleteVersionConfirm.versionId);
+                                    setDeleteVersionConfirm(null);
+                                }}
+                                style={{ flex: 1, padding: 10, background: '#ff453a', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+                            >删除</button>
+                            <button
+                                onClick={() => setDeleteVersionConfirm(null)}
+                                style={{ padding: '10px 20px', background: '#333', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+                            >取消</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Delete Issue Confirmation */}
+            {deleteIssueConfirm && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+                    <div style={{ background: '#1a1a1a', padding: 20, borderRadius: 12, width: 300 }}>
+                        <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 15 }}>删除任务</div>
+                        <div style={{ fontSize: 12, color: '#888', marginBottom: 15 }}>确定要删除任务 #{deleteIssueConfirm} 吗？此操作不可撤销。</div>
+                        <div style={{ display: 'flex', gap: 10 }}>
+                            <button
+                                onClick={async () => {
+                                    await vm.deleteIssue(deleteIssueConfirm);
+                                    setDeleteIssueConfirm(null);
+                                    setSelectedIssueId(null);
+                                }}
+                                style={{ flex: 1, padding: 10, background: '#ff453a', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+                            >删除</button>
+                            <button
+                                onClick={() => setDeleteIssueConfirm(null)}
+                                style={{ padding: '10px 20px', background: '#333', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+                            >取消</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Sidebar */}
+            <aside className="sidebar" style={{ width: sidebarWidth, minWidth: sidebarWidth, maxWidth: sidebarWidth }}>
+                <div className="sidebar-content" ref={sidebarRef} style={{ scrollbarWidth: 'none' }}>
+                    {/* Sliding Sidebar Selection Indicator */}
+                    <div className="sidebar-selection-indicator" style={sidebarIndicatorStyle} />
+
+                    <div
+                        className={`sidebar-item ${vm.selectedProjectId === -1 ? 'selected' : ''}`}
+                        style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 10 }}
+                        onClick={() => vm.selectProject(-1)}
+                    >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                            <rect x="3" y="3" width="7" height="7"></rect>
+                            <rect x="14" y="3" width="7" height="7"></rect>
+                            <rect x="14" y="14" width="7" height="7"></rect>
+                            <rect x="3" y="14" width="7" height="7"></rect>
+                        </svg>
+                        <span>All Projects</span>
+                    </div>
+
+                    <div
+                        className={`sidebar-item ${vm.selectedProjectId === -2 ? 'selected' : ''}`}
+                        style={{ marginTop: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                        onClick={() => vm.selectProject(-2)}
+                    >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                            <span>My Followed</span>
+                        </div>
+                        <span style={{ fontSize: 10, display: 'flex', gap: 4, alignItems: 'center' }}>
+                            {vm.followedStatusCounts.dev > 0 && <span style={{ color: '#ff453a' }}>{vm.followedStatusCounts.dev}</span>}
+                            {vm.followedStatusCounts.done > 0 && <span style={{ color: '#30d158' }}>{vm.followedStatusCounts.done}</span>}
+                            {!vm.hideVerifiedInFollowed && vm.followedStatusCounts.verified > 0 && <span style={{ color: '#666' }}>{vm.followedStatusCounts.verified}</span>}
+                        </span>
+                    </div>
+
+                    <div
+                        className={`sidebar-item ${vm.selectedProjectId === -3 ? 'selected' : ''}`}
+                        style={{ marginTop: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                        onClick={() => vm.selectProject(-3)}
+                    >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                                <circle cx="12" cy="7" r="4"></circle>
+                            </svg>
+                            <span>My Assigned</span>
+                        </div>
+                        <span style={{ fontSize: 10, display: 'flex', gap: 4, alignItems: 'center' }}>
+                            {vm.assignedStatusCounts.dev > 0 && <span style={{ color: '#ff453a' }}>{vm.assignedStatusCounts.dev}</span>}
+                            {vm.assignedStatusCounts.done > 0 && <span style={{ color: '#30d158' }}>{vm.assignedStatusCounts.done}</span>}
+                            {!vm.hideVerifiedInAssigned && vm.assignedStatusCounts.verified > 0 && <span style={{ color: '#666' }}>{vm.assignedStatusCounts.verified}</span>}
+                        </span>
+                    </div>
+
+                    {vm.projects.map(p => {
+                        const versions = vm.projectVersionsMap[p.id] || [];
+                        // Use initialVersionsWithIssues for stable categorization (doesn't change when fetching Others versions)
+                        const activeVersions = versions.filter(v => vm.initialVersionsWithIssues.has(v.id));
+                        const emptyVersions = versions.filter(v => !vm.initialVersionsWithIssues.has(v.id));
+
+                        return (
+                            <div key={p.id}>
+                                <div
+                                    className={`sidebar-item ${vm.selectedProjectId === p.id && !vm.selectedVersionId ? 'selected' : ''}`}
+                                    style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                                >
+                                    <span onClick={() => {
+                                        setExpandedProjects(prev => ({ ...prev, [p.id]: !prev[p.id] }));
+                                        vm.selectProject(p.id);
+                                    }} style={{ flex: 1 }}>
+                                        {expandedProjects[p.id] ? '⌄' : '›'} {p.name}
+                                    </span>
+                                    <span
+                                        onClick={(e) => { e.stopPropagation(); setNewVersionProjectId(p.id); setNewVersionName(''); }}
+                                        style={{ color: '#666', fontSize: 14, padding: '0 5px', cursor: 'pointer' }}
+                                        title="添加版本"
+                                    >+</span>
+                                </div>
+                                {expandedProjects[p.id] && (
+                                    <div style={{ borderLeft: '1px solid #222', marginLeft: 15 }}>
+                                        {versions.length === 0 && <div style={{ fontSize: 11, color: '#444', padding: '5px 20px' }}>No versions</div>}
+                                        {activeVersions.map(v => {
+                                            const sc = vm.versionStatusCounts[v.id] || { dev: 0, done: 0, verified: 0 };
+                                            const totalCount = sc.dev + sc.done + sc.verified;
+                                            const isPinned = vm.pinnedVersionIds.has(v.id);
+                                            return (
+                                                <div
+                                                    key={v.id}
+                                                    className={`sidebar-item ${vm.selectedVersionId === v.id ? 'selected' : ''}`}
+                                                    onClick={() => vm.selectVersion(p.id, v.id)}
+                                                    style={{ fontSize: 12, paddingLeft: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                                                >
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, flex: 1, minWidth: 0 }}>
+                                                        <span
+                                                            onClick={(e) => { e.stopPropagation(); vm.togglePinVersion(p.id, v.id); }}
+                                                            style={{
+                                                                cursor: 'pointer',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center',
+                                                                width: 20,
+                                                                height: 20,
+                                                                color: isPinned ? '#30d158' : 'var(--text-secondary)',
+                                                                opacity: isPinned ? 1 : 0.4,
+                                                                transform: isPinned ? 'none' : 'rotate(45deg)',
+                                                                transition: 'all 0.2s',
+                                                                padding: '0 4px'
+                                                            }}
+                                                            title={isPinned ? "取消置顶" : "置顶版本"}
+                                                        >
+                                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                                                                <path d="M16 9V4l1 0V2H7v2l1 0v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z" />
+                                                            </svg>
+                                                        </span>
+                                                        {editingVersionId === v.id ? (
+                                                            <input
+                                                                value={editVersionName}
+                                                                autoFocus
+                                                                onChange={e => setEditVersionName(e.target.value)}
+                                                                onBlur={async () => {
+                                                                    if (editVersionName.trim() && editVersionName !== v.name) {
+                                                                        await vm.updateVersion(p.id, v.id, { name: editVersionName.trim() });
+                                                                    }
+                                                                    setEditingVersionId(null);
+                                                                }}
+                                                                onKeyDown={async e => {
+                                                                    if (e.key === 'Enter') {
+                                                                        if (editVersionName.trim() && editVersionName !== v.name) {
+                                                                            await vm.updateVersion(p.id, v.id, { name: editVersionName.trim() });
+                                                                        }
+                                                                        setEditingVersionId(null);
+                                                                    } else if (e.key === 'Escape') {
+                                                                        setEditingVersionId(null);
+                                                                    }
+                                                                }}
+                                                                style={{ background: '#333', border: '1px solid #0c66ff', color: 'white', fontSize: 11, padding: '2px 5px', borderRadius: 4, width: '100%', outline: 'none' }}
+                                                            />
+                                                        ) : (
+                                                            <span onDoubleClick={() => { setEditingVersionId(v.id); setEditVersionName(v.name); }} style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v.name}</span>
+                                                        )}
+                                                    </div>
+                                                    <span style={{ fontSize: 10, display: 'flex', gap: 4, alignItems: 'center' }}>
+                                                        {sc.dev > 0 && <span style={{ color: '#ff453a' }}>{sc.dev}</span>}
+                                                        {sc.done > 0 && <span style={{ color: '#30d158' }}>{sc.done}</span>}
+                                                        {sc.verified > 0 && <span style={{ color: '#666' }}>{sc.verified}</span>}
+                                                        {totalCount === 0 && (
+                                                            <span
+                                                                onClick={(e) => { e.stopPropagation(); setDeleteVersionConfirm({ projectId: p.id, versionId: v.id, name: v.name }); }}
+                                                                style={{ color: '#ff453a', fontSize: 12, padding: '0 3px', cursor: 'pointer' }}
+                                                                title="删除版本"
+                                                            >×</span>
+                                                        )}
+                                                    </span>
+                                                </div>
+                                            );
+                                        })}
+                                        {emptyVersions.length > 0 && (
+                                            <div style={{ marginTop: 5 }}>
+                                                <div
+                                                    style={{ fontSize: 10, color: '#333', padding: '5px 20px', textTransform: 'uppercase', letterSpacing: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
+                                                    onClick={() => setExpandedOthers(prev => ({ ...prev, [p.id]: !prev[p.id] }))}
+                                                >
+                                                    <span style={{ fontSize: 8 }}>{expandedOthers[p.id] ? '▼' : '►'}</span>
+                                                    Others ({emptyVersions.length})
+                                                </div>
+                                                {expandedOthers[p.id] && emptyVersions.map(v => {
+                                                    const isPinned = vm.pinnedVersionIds.has(v.id);
+                                                    return (
+                                                        <div
+                                                            key={v.id}
+                                                            className={`sidebar-item ${vm.selectedVersionId === v.id ? 'selected' : ''}`}
+                                                            style={{ fontSize: 11, paddingLeft: 10, color: '#444', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                                                        >
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: 5, flex: 1, minWidth: 0 }}>
+                                                                <span
+                                                                    onClick={(e) => { e.stopPropagation(); vm.togglePinVersion(p.id, v.id); }}
+                                                                    style={{
+                                                                        cursor: 'pointer',
+                                                                        display: 'flex',
+                                                                        alignItems: 'center',
+                                                                        justifyContent: 'center',
+                                                                        width: 20,
+                                                                        height: 20,
+                                                                        color: isPinned ? '#30d158' : 'var(--text-secondary)',
+                                                                        opacity: isPinned ? 1 : 0.4,
+                                                                        transform: isPinned ? 'none' : 'rotate(45deg)',
+                                                                        transition: 'all 0.2s',
+                                                                        padding: '0 4px'
+                                                                    }}
+                                                                    title={isPinned ? "取消置顶" : "置顶版本"}
+                                                                >
+                                                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+                                                                        <path d="M16 9V4l1 0V2H7v2l1 0v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z" />
+                                                                    </svg>
+                                                                </span>
+                                                                {editingVersionId === v.id ? (
+                                                                    <input
+                                                                        value={editVersionName}
+                                                                        autoFocus
+                                                                        onChange={e => setEditVersionName(e.target.value)}
+                                                                        onBlur={async () => {
+                                                                            if (editVersionName.trim() && editVersionName !== v.name) {
+                                                                                await vm.updateVersion(p.id, v.id, { name: editVersionName.trim() });
+                                                                            }
+                                                                            setEditingVersionId(null);
+                                                                        }}
+                                                                        onKeyDown={async e => {
+                                                                            if (e.key === 'Enter') {
+                                                                                if (editVersionName.trim() && editVersionName !== v.name) {
+                                                                                    await vm.updateVersion(p.id, v.id, { name: editVersionName.trim() });
+                                                                                }
+                                                                                setEditingVersionId(null);
+                                                                            } else if (e.key === 'Escape') {
+                                                                                setEditingVersionId(null);
+                                                                            }
+                                                                        }}
+                                                                        style={{ background: 'var(--input-bg)', border: '1px solid var(--accent-color)', color: 'var(--text-primary)', fontSize: 11, padding: '2px 5px', borderRadius: 4, width: '100%', outline: 'none' }}
+                                                                    />
+                                                                ) : (
+                                                                    <span
+                                                                        onDoubleClick={() => { setEditingVersionId(v.id); setEditVersionName(v.name); }}
+                                                                        onClick={() => { vm.selectVersion(p.id, v.id); vm.fetchVersionIssues(v.id); }}
+                                                                        style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                                                                    >
+                                                                        {v.name}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                            {(vm.versionIssueCounts[v.id] || 0) === 0 && (
+                                                                <span
+                                                                    onClick={(e) => { e.stopPropagation(); setDeleteVersionConfirm({ projectId: p.id, versionId: v.id, name: v.name }); }}
+                                                                    style={{ color: '#ff453a', fontSize: 12, padding: '0 5px', cursor: 'pointer' }}
+                                                                    title="删除版本"
+                                                                >×</span>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+
+                {/* Sidebar Footer with Settings */}
+                <div style={{ padding: '15px', borderTop: '1px solid #222', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div
+                        className="sidebar-item"
+                        onClick={() => setShowSettings(true)}
+                        style={{ margin: 0, padding: '8px 12px', flex: 1, textAlign: 'center', background: 'rgba(255,255,255,0.05)', borderRadius: 8, fontSize: 13 }}
+                    >
+                        ⚙️ Settings
+                    </div>
+                </div>
+            </aside>
+
+            {/* Sidebar Resize Handle */}
+            <div
+                onMouseDown={() => setResizingPane('sidebar')}
+                style={{ width: 4, cursor: 'col-resize', background: resizingPane === 'sidebar' ? '#0c66ff' : 'transparent', flexShrink: 0 }}
+                onMouseEnter={e => (e.target as HTMLDivElement).style.background = '#333'}
+                onMouseLeave={e => (e.target as HTMLDivElement).style.background = resizingPane === 'sidebar' ? '#0c66ff' : 'transparent'}
+            />
+
+            {/* List */}
+            <section className="issue-list-pane" style={{ width: listWidth, minWidth: 300, maxWidth: 800, flexShrink: 0 }}>
+                <div style={{ padding: '40px 15px 10px', display: 'flex', gap: 10, alignItems: 'center' }}>
+                    <div style={{ flex: 1, position: 'relative' }}>
+                        <span style={{ position: 'absolute', left: 10, top: 10, color: 'var(--text-secondary)' }}>🔍</span>
+                        <input type="text" placeholder="Search" value={vm.searchQuery} onChange={e => vm.setSearchQuery(e.target.value)} style={{ width: '100%', padding: '10px 10px 10px 35px', background: 'var(--input-bg)', border: '1px solid var(--input-border)', borderRadius: 8, color: 'var(--text-primary)' }} />
+                    </div>
+                </div>
+                <div style={{ padding: '0 15px 10px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, fontSize: 11, color: '#444' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span>
+                                {vm.isLoading
+                                    ? '⏳ 正在拉取...'
+                                    : `✅ API 已加载: ${vm.allIssues.length} | 结果显示: ${vm.groupedIssues.sortedKeys.reduce((acc, k) => acc + vm.groupedIssues.groups[k].length, 0)}${vm.isBackgroundRefreshing ? ' | 🔄 后台刷新中...' : ''}`}
+                            </span>
+                            <button
+                                onClick={async () => {
+                                    if (!isRefreshing && !vm.isLoading) {
+                                        setIsRefreshing(true);
+                                        await vm.refreshData();
+                                        setIsRefreshing(false);
+                                    }
+                                }}
+                                disabled={isRefreshing || vm.isLoading}
+                                style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    cursor: isRefreshing || vm.isLoading ? 'not-allowed' : 'pointer',
+                                    color: 'var(--accent-color)',
+                                    fontSize: 14,
+                                    padding: '2px 6px',
+                                    borderRadius: 4,
+                                    opacity: isRefreshing || vm.isLoading ? 0.5 : 1,
+                                    transition: 'opacity 0.2s'
+                                }}
+                                title="刷新"
+                            >
+                                <span style={{
+                                    display: 'inline-block',
+                                    animation: isRefreshing ? 'spin 1s linear infinite' : 'none'
+                                }}>↻</span>
+                            </button>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                            {/* Group by toggle */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                                分组:
+                                <select
+                                    value={vm.groupByMode}
+                                    onChange={e => {
+                                        const newMode = e.target.value as 'status' | 'assignee';
+                                        vm.setGroupByMode(newMode);
+                                        // Reset the filter that corresponds to the new grouping
+                                        if (newMode === 'status') {
+                                            vm.setSelectedStatusId(null);
+                                        } else {
+                                            vm.setSelectedAssigneeId(null);
+                                        }
+                                    }}
+                                    style={{ background: 'var(--input-bg)', border: 'none', color: 'var(--text-secondary)', borderRadius: 4, padding: '1px 5px', fontSize: 11 }}
+                                >
+                                    <option value="status">按状态</option>
+                                    <option value="assignee">按人员</option>
+                                </select>
+                            </div>
+                            {vm.selectedProjectId !== -2 && vm.selectedProjectId !== -3 && (
+                                <>
+                                    {/* Show assignee filter when grouping by status, status filter when grouping by assignee */}
+                                    {vm.groupByMode === 'status' ? (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                                            指派给:
+                                            <select
+                                                value={vm.selectedAssigneeId || ''}
+                                                onChange={e => vm.setSelectedAssigneeId(e.target.value ? parseInt(e.target.value) : null)}
+                                                style={{ background: 'var(--input-bg)', border: 'none', color: 'var(--text-secondary)', borderRadius: 4, padding: '1px 5px', fontSize: 11 }}
+                                            >
+                                                <option value="">全部</option>
+                                                {vm.currentUser && <option value={vm.currentUser.id}>我自己 ({vm.currentUser.firstname})</option>}
+                                                {renderGroupedMemberOptions(currentProjectMembers, vm.currentUser ? [vm.currentUser.id] : undefined)}
+                                            </select>
+                                        </div>
+                                    ) : (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                                            状态:
+                                            <select
+                                                value={vm.selectedStatusId || ''}
+                                                onChange={e => vm.setSelectedStatusId(e.target.value ? parseInt(e.target.value) : null)}
+                                                style={{ background: 'var(--input-bg)', border: 'none', color: 'var(--text-secondary)', borderRadius: 4, padding: '1px 5px', fontSize: 11 }}
+                                            >
+                                                <option value="">全部</option>
+                                                {vm.issueStatuses.map(s => (
+                                                    <option key={s.id} value={s.id}>{s.name}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    )}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, position: 'relative' }}>
+                                        协助者:
+                                        <div className="watcher-filter-trigger" style={{ background: 'var(--input-bg)', borderRadius: 4, padding: '1px 8px', fontSize: 11, cursor: 'pointer', color: 'var(--text-secondary)', border: vm.selectedWatcherIds.size > 0 ? '1px solid var(--accent-color)' : 'none' }} onClick={() => (window as any).toggleWatcherFilter?.()}>
+                                            {vm.selectedWatcherIds.size > 0 ? `${vm.selectedWatcherIds.size} 人` : '全部'}
+                                            <span style={{ marginLeft: 3 }}>⌄</span>
+                                        </div>
+                                        <div id="watcher-filter-dropdown" style={{
+                                            display: 'none',
+                                            position: 'absolute',
+                                            top: 22,
+                                            right: 0,
+                                            background: 'var(--modal-bg)',
+                                            border: '1px solid var(--border-color)',
+                                            borderRadius: 8,
+                                            padding: '6px 0',
+                                            zIndex: 100,
+                                            boxShadow: '0 8px 20px rgba(0,0,0,0.25)',
+                                            width: 160,
+                                            maxHeight: 240,
+                                            overflowY: 'auto'
+                                        }}>
+                                            {(() => {
+                                                const { grouped, noGroup, sortedGroups } = groupMembersByRole(currentProjectMembers);
+                                                const hasGroups = sortedGroups.length > 0;
+
+                                                const renderMemberCheckbox = (m: { id: number; name: string }) => (
+                                                    <label
+                                                        key={m.id}
+                                                        className="dropdown-item"
+                                                        style={{
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            gap: 10,
+                                                            padding: '6px 12px',
+                                                            cursor: 'pointer',
+                                                            fontSize: 12,
+                                                            color: 'var(--text-primary)',
+                                                            transition: 'background 0.1s'
+                                                        }}
+                                                        onMouseEnter={e => e.currentTarget.style.background = 'rgba(128,128,128,0.1)'}
+                                                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                                                    >
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={vm.selectedWatcherIds.has(m.id)}
+                                                            style={{ cursor: 'pointer', accentColor: 'var(--accent-color)' }}
+                                                            onChange={() => {
+                                                                const next = new Set(vm.selectedWatcherIds);
+                                                                if (next.has(m.id)) next.delete(m.id);
+                                                                else next.add(m.id);
+                                                                vm.setSelectedWatcherIds(next);
+                                                            }}
+                                                        />
+                                                        <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.name}</span>
+                                                    </label>
+                                                );
+
+                                                if (!hasGroups) {
+                                                    return currentProjectMembers.map(m => renderMemberCheckbox(m));
+                                                }
+
+                                                return (
+                                                    <>
+                                                        {sortedGroups.map(groupName => (
+                                                            <React.Fragment key={groupName}>
+                                                                <div style={{ padding: '6px 12px 4px', fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5, background: 'rgba(128,128,128,0.05)' }}>
+                                                                    {groupName}
+                                                                </div>
+                                                                {grouped[groupName].map(m => renderMemberCheckbox(m))}
+                                                            </React.Fragment>
+                                                        ))}
+                                                        {noGroup.length > 0 && (
+                                                            <React.Fragment>
+                                                                <div style={{ padding: '6px 12px 4px', fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5, background: 'rgba(128,128,128,0.05)' }}>
+                                                                    其他
+                                                                </div>
+                                                                {noGroup.map(m => renderMemberCheckbox(m))}
+                                                            </React.Fragment>
+                                                        )}
+                                                    </>
+                                                );
+                                            })()}
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+                            {vm.selectedProjectId === -2 && (
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 11 }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={vm.hideVerifiedInFollowed}
+                                        onChange={e => vm.setHideVerifiedInFollowed(e.target.checked)}
+                                        style={{ cursor: 'pointer', accentColor: 'var(--accent-color)' }}
+                                    />
+                                    隐藏已验证完成
+                                </label>
+                            )}
+                            {vm.selectedProjectId === -3 && (
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 11 }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={vm.hideVerifiedInAssigned}
+                                        onChange={e => vm.setHideVerifiedInAssigned(e.target.checked)}
+                                        style={{ cursor: 'pointer', accentColor: 'var(--accent-color)' }}
+                                    />
+                                    隐藏已验证完成
+                                </label>
+                            )}
+                        </div>
+                    </div>
+                    {vm.errorMessage && (
+                        <div style={{ fontSize: 10, color: '#ff453a', background: 'rgba(255,69,58,0.1)', padding: '4px 8px', borderRadius: 4 }}>
+                            🚫 {vm.errorMessage}
+                        </div>
+                    )}
+                </div>
+
+                <div
+                    ref={issueListRef}
+                    style={{ overflowY: 'auto', flex: 1, paddingBottom: 60, position: 'relative' }}
+                >
+                    <div className="issue-list-content" ref={listRef}>
+                        {/* Sliding Selection Indicator */}
+                        <div className="selection-indicator" style={indicatorStyle} />
+
+                        {/* Render issues - always show deferred data */}
+                        {deferredGroupedIssues.sortedKeys.map(key => {
+                            const isCollapsed = collapsedGroups[key] ?? key.includes('验证完成');
+                            const issuesInGroup = deferredGroupedIssues.groups[key];
+
+                            return (
+                                <div key={key}>
+                                    <div
+                                        className="group-header"
+                                        onClick={() => toggleGroup(key)}
+                                        style={{
+                                            cursor: 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 8,
+                                            userSelect: 'none'
+                                        }}
+                                    >
+                                        <span style={{
+                                            fontSize: 10,
+                                            width: 12,
+                                            display: 'inline-block',
+                                            transform: isCollapsed ? 'rotate(-90deg)' : 'none',
+                                            transition: 'transform 0.2s',
+                                            textAlign: 'center'
+                                        }}>▼</span>
+                                        <span style={{ flex: 1 }}>{key}</span>
+                                        <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 'normal' }}>{issuesInGroup.length}</span>
+                                    </div>
+
+                                    {!isCollapsed && issuesInGroup.map((i: Issue) => (
+                                        <MemoIssueItem
+                                            key={i.id}
+                                            issue={i}
+                                            isSelected={selectedIssueId === i.id}
+                                            onSelect={handleSelectIssue}
+                                            onUpdateStatus={handleUpdateStatus}
+                                            onUpdatePriority={handleUpdatePriority}
+                                            onUpdateVersion={handleUpdateVersion}
+                                            onUpdateAssignee={handleUpdateAssignee}
+                                            statusList={stableStatusList}
+                                            priorityList={stablePriorityList}
+                                            versionList={stableVersionListCache[i.project?.id || -1] || []}
+                                            memberList={stableMemberListCache[i.project?.id || -1] || stableMemberList}
+                                            isFollowed={vm.followedIssueIds.has(i.id)}
+                                            onToggleFollow={async (id) => {
+                                                const followed = vm.followedIssueIds.has(id);
+                                                if (followed) {
+                                                    await vm.removeWatcher(id, vm.currentUser!.id);
+                                                } else {
+                                                    await vm.addWatcher(id, vm.currentUser!.id);
+                                                }
+                                            }}
+                                        />
+                                    ))}
+                                </div>
+                            );
+                        })}
+                        {deferredGroupedIssues.sortedKeys.length === 0 && !vm.isLoading && (
+                            <div style={{ textAlign: 'center', marginTop: 50, color: 'var(--text-secondary)', fontSize: 13 }}>
+                                该项当前下未发现任务。<br />
+                                <button onClick={() => vm.refreshData()} style={{ marginTop: 10, background: 'none', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '5px 15px', borderRadius: 4, cursor: 'pointer' }}>强制刷新</button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                <div className="add-task-bar" style={{ position: 'absolute', bottom: 0, left: 0, right: 0 }}>
+                    <span style={{ color: '#0c66ff', fontSize: 20, cursor: 'pointer' }}>+</span>
+                    <input type="text" placeholder="快速添加任务..." value={newTaskSubject} onChange={e => setNewTaskSubject(e.target.value)} onKeyDown={e => {
+                        if (e.key === 'Enter' && newTaskSubject.trim() && vm.selectedProjectId !== -1) {
+                            vm.createIssue(newTaskSubject, vm.selectedProjectId!, quickAddVersionId || undefined, quickAddAssigneeId || undefined);
+                            setNewTaskSubject('');
+                        }
+                    }} style={{ flex: 1, background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: 8 }} />
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                        {vm.selectedProjectId !== -1 && vm.selectedProjectId !== null && (
+                            <span style={{ fontSize: 11, color: '#888', position: 'relative' }}>
+                                {(vm.projectVersionsMap[vm.selectedProjectId] || []).find((v: { id: number }) => v.id === quickAddVersionId)?.name || '无版本'}
+                                <select
+                                    value={quickAddVersionId || ''}
+                                    onChange={e => setQuickAddVersionId(e.target.value ? parseInt(e.target.value) : null)}
+                                    style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                                >
+                                    <option value="">无版本</option>
+                                    {(vm.projectVersionsMap[vm.selectedProjectId] || []).map((v: { id: number; name: string }) => (
+                                        <option key={v.id} value={v.id}>{v.name}</option>
+                                    ))}
+                                </select>
+                                <span style={{ marginLeft: 3, fontSize: 10, color: '#666' }}>⌄</span>
+                            </span>
+                        )}
+                        <span style={{ fontSize: 11, color: '#888', position: 'relative' }}>
+                            {quickAddAssigneeId === null
+                                ? '👤 暂未指派'
+                                : currentProjectMembers.find(m => m.id === quickAddAssigneeId)?.name || '👤 暂未指派'}
+                            <select
+                                value={quickAddAssigneeId || ''}
+                                onChange={e => setQuickAddAssigneeId(e.target.value ? parseInt(e.target.value) : null)}
+                                style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                            >
+                                <option value="">👤 暂未指派</option>
+                                {renderGroupedMemberOptions(currentProjectMembers)}
+                            </select>
+                            <span style={{ marginLeft: 3, fontSize: 10, color: '#666' }}>⌄</span>
+                        </span>
+                    </div>
+                    {vm.selectedProjectId === -1 && (
+                        <div style={{ fontSize: 11, color: '#444' }}>请选择项目</div>
+                    )}
+                </div>
+            </section>
+
+            {/* List Resize Handle */}
+            <div
+                onMouseDown={() => setResizingPane('list')}
+                style={{ width: 4, cursor: 'col-resize', background: resizingPane === 'list' ? '#0c66ff' : 'transparent', flexShrink: 0 }}
+                onMouseEnter={e => (e.target as HTMLDivElement).style.background = '#333'}
+                onMouseLeave={e => (e.target as HTMLDivElement).style.background = resizingPane === 'list' ? '#0c66ff' : 'transparent'}
+            />
+
+            {/* Detail */}
+            <main className="issue-detail-pane" ref={detailPaneRef}>
+                {selectedIssue ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+                        <div style={{ padding: '40px 30px 20px' }}>
+                            {/* ID and actions row */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                                <span style={{ color: '#0c66ff', fontSize: 13 }}>#{selectedIssue.id}</span>
+                                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                                    <button
+                                        onClick={() => setDeleteIssueConfirm(selectedIssue.id)}
+                                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ff453a', fontSize: 14 }}
+                                        title="删除任务"
+                                    >🗑️</button>
+                                </div>
+                            </div>
+                            {/* Title row */}
+                            <div>
+                                {editingTitle ? (
+                                    <textarea
+                                        value={editTitleValue}
+                                        onChange={e => {
+                                            setEditDescriptionValue(e.target.value); // Sync with local state if needed
+                                            setEditTitleValue(e.target.value);
+                                            e.target.style.height = 'auto';
+                                            e.target.style.height = e.target.scrollHeight + 'px';
+                                        }}
+                                        onBlur={async () => {
+                                            if (editTitleValue.trim() && editTitleValue !== selectedIssue.subject) {
+                                                await vm.updateIssue(selectedIssue.id, { subject: editTitleValue.trim() });
+                                            }
+                                            setEditingTitle(false);
+                                        }}
+                                        onKeyDown={async e => {
+                                            if (e.key === 'Enter') {
+                                                e.preventDefault();
+                                                if (editTitleValue.trim() && editTitleValue !== selectedIssue.subject) {
+                                                    await vm.updateIssue(selectedIssue.id, { subject: editTitleValue.trim() });
+                                                }
+                                                setEditingTitle(false);
+                                            } else if (e.key === 'Escape') {
+                                                setEditingTitle(false);
+                                            }
+                                        }}
+                                        autoFocus
+                                        ref={(el) => {
+                                            if (el) {
+                                                el.style.height = 'auto';
+                                                el.style.height = el.scrollHeight + 'px';
+                                                // Focus and move cursor to end
+                                                if (document.activeElement !== el) {
+                                                    el.focus();
+                                                }
+                                                if (el.selectionStart === 0 && el.selectionStart === el.selectionEnd) {
+                                                    const len = el.value.length;
+                                                    el.setSelectionRange(len, len);
+                                                }
+                                            }
+                                        }}
+                                        style={{
+                                            fontSize: 24,
+                                            fontWeight: 600,
+                                            width: '100%',
+                                            background: 'transparent',
+                                            border: 'none',
+                                            borderBottom: '2px solid #0c66ff',
+                                            color: 'var(--text-primary)',
+                                            outline: 'none',
+                                            padding: 0,
+                                            margin: 0,
+                                            fontFamily: 'inherit',
+                                            lineHeight: '1.2',
+                                            resize: 'none',
+                                            overflow: 'hidden',
+                                            display: 'block'
+                                        }}
+                                    />
+                                ) : (
+                                    <h1
+                                        style={{ fontSize: 24, fontWeight: 600, cursor: 'pointer', margin: 0, lineHeight: '1.2', color: 'var(--text-primary)' }}
+                                        onClick={() => { setEditTitleValue(selectedIssue.subject); setEditingTitle(true); }}
+                                        title="点击编辑标题"
+                                    >{selectedIssue.subject}</h1>
+                                )}
+                            </div>
+                            <div style={{ marginTop: 15, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                                    <select
+                                        className="status-tag"
+                                        value={selectedIssue.status.id}
+                                        onChange={e => vm.updateIssue(selectedIssue.id, { status_id: parseInt(e.target.value) })}
+                                        style={{
+                                            border: 'none',
+                                            color: '#ff453a',
+                                            background: 'rgba(255,69,58,0.12)',
+                                            fontWeight: 600,
+                                            borderRadius: 20,
+                                            padding: '3px 22px 3px 12px',
+                                            outline: 'none',
+                                            cursor: 'pointer',
+                                            fontSize: 11,
+                                            WebkitAppearance: 'none',
+                                            MozAppearance: 'none',
+                                            appearance: 'none',
+                                            width: 'fit-content'
+                                        }}
+                                    >
+                                        {vm.issueStatuses.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                    </select>
+                                    <span style={{ position: 'absolute', right: 8, fontSize: 8, pointerEvents: 'none', color: '#ff453a', opacity: 0.8 }}>▼</span>
+                                </div>
+                                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                                    <select
+                                        className="status-tag"
+                                        value={selectedIssue.assigned_to?.id || ''}
+                                        onChange={e => vm.updateIssue(selectedIssue.id, { assigned_to_id: e.target.value || '' })}
+                                        style={{
+                                            border: 'none',
+                                            color: 'var(--text-primary)',
+                                            background: 'var(--button-secondary)',
+                                            borderRadius: 20,
+                                            padding: '3px 22px 3px 12px',
+                                            outline: 'none',
+                                            cursor: 'pointer',
+                                            fontSize: 11,
+                                            WebkitAppearance: 'none',
+                                            MozAppearance: 'none',
+                                            appearance: 'none',
+                                            width: 'fit-content'
+                                        }}
+                                    >
+                                        <option value="">👤 暂未指派</option>
+                                        {renderGroupedMemberOptions(getProjectMembers(selectedIssue.project?.id))}
+                                    </select>
+                                    <span style={{ position: 'absolute', right: 8, fontSize: 8, pointerEvents: 'none', color: 'var(--text-secondary)' }}>▼</span>
+                                </div>
+                                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                                    <select
+                                        value=""
+                                        onChange={async e => {
+                                            if (e.target.value) {
+                                                await vm.addWatcher(selectedIssue.id, parseInt(e.target.value));
+                                            }
+                                        }}
+                                        style={{
+                                            border: 'none',
+                                            color: 'var(--text-secondary)',
+                                            background: 'var(--button-secondary)',
+                                            borderRadius: 20,
+                                            padding: '3px 22px 3px 12px',
+                                            outline: 'none',
+                                            cursor: 'pointer',
+                                            fontSize: 11,
+                                            WebkitAppearance: 'none',
+                                            MozAppearance: 'none',
+                                            appearance: 'none',
+                                            width: 'fit-content'
+                                        }}
+                                    >
+                                        <option value="">＋ 添加协助者</option>
+                                        {renderGroupedMemberOptions(getProjectMembers(selectedIssue.project?.id), selectedIssue.watchers?.map(w => w.id))}
+                                    </select>
+                                    <span style={{ position: 'absolute', right: 8, fontSize: 8, pointerEvents: 'none', color: 'var(--text-secondary)' }}>▼</span>
+                                </div>
+                            </div>
+                            {selectedIssue.watchers && selectedIssue.watchers.length > 0 && (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+                                    {selectedIssue.watchers.map(w => (
+                                        <div key={w.id} style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: 12, fontSize: 11, color: 'var(--text-secondary)' }}>
+                                            <span>{w.name}</span>
+                                            <span
+                                                onClick={() => vm.removeWatcher(selectedIssue.id, w.id)}
+                                                style={{ cursor: 'pointer', opacity: 0.6, fontSize: 13 }}
+                                                title="移除协助者"
+                                            >×</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 15 }}>创建人：{selectedIssue.author.name} • 时间：{format(new Date(selectedIssue.created_on), 'yyyy-MM-dd HH:mm')}</div>
+                        </div>
+
+                        <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 100 }}>
+                            <div style={{ padding: '0 30px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+                                    <h3 style={{ fontSize: 13, fontWeight: 500, color: '#666', textTransform: 'uppercase' }}>Description</h3>
+                                    {!editingDescription && (
+                                        <button
+                                            onClick={() => { setEditDescriptionValue(selectedIssue.description || ''); setEditingDescription(true); }}
+                                            style={{ background: 'none', border: 'none', color: '#0c66ff', fontSize: 18, cursor: 'pointer' }}
+                                        >✎</button>
+                                    )}
+                                </div>
+                                {editingDescription ? (
+                                    <RichEditor
+                                        initialValue={processedDescription}
+                                        onChange={(val) => setEditDescriptionValue(val)}
+                                        onSave={async () => {
+                                            let cleanedDescription = editDescriptionValue;
+                                            pendingUploads.forEach(u => {
+                                                if (u.tempUrl) {
+                                                    const escapedUrl = u.tempUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                                                    const regex = new RegExp(escapedUrl, 'g');
+                                                    const finalFilename = encodeURIComponent(u.filename);
+                                                    cleanedDescription = cleanedDescription.replace(regex, finalFilename);
+                                                }
+                                            });
+
+                                            await vm.updateIssue(selectedIssue.id, {
+                                                description: cleanedDescription,
+                                                uploads: pendingUploads.map(u => ({
+                                                    token: u.token,
+                                                    filename: u.filename,
+                                                    content_type: u.content_type
+                                                }))
+                                            });
+                                            setEditingDescription(false);
+                                            setPendingUploads([]);
+                                        }}
+                                        onCancel={() => {
+                                            setEditingDescription(false);
+                                            setPendingUploads([]);
+                                        }}
+                                        onUpload={async (file) => {
+                                            const result = await vm.uploadAttachment(file);
+                                            if (result) {
+                                                let tempUrl = '';
+                                                if (file.type.startsWith('image/')) {
+                                                    tempUrl = await new Promise((resolve) => {
+                                                        const reader = new FileReader();
+                                                        reader.onload = (e) => resolve(e.target?.result as string);
+                                                        reader.readAsDataURL(file);
+                                                    });
+                                                } else {
+                                                    tempUrl = `attachment:${file.name}`;
+                                                }
+
+                                                setPendingUploads(prev => [...prev, {
+                                                    token: result.token,
+                                                    filename: file.name,
+                                                    content_type: file.type,
+                                                    tempUrl
+                                                }]);
+                                                return result;
+                                            }
+                                            return null;
+                                        }}
+                                    />
+                                ) : (
+                                    <div
+                                        style={{ lineHeight: 1.6, fontSize: 14, minHeight: 50 }}
+                                    >
+                                        {renderMarkdownWithImages(selectedIssue.description)}
+                                        {!selectedIssue.description && <i style={{ color: '#444' }}>暂无描述</i>}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Attachments Section */}
+                            {(() => {
+                                const currentDescription = editingDescription ? editDescriptionValue : (selectedIssue.description || '');
+
+                                const isImageReferenced = (filename: string, text: string) => {
+                                    if (!text) return false;
+                                    const encoded = encodeURIComponent(filename);
+
+                                    // Check for Textile image syntax: !filename! or !filename(alt)!
+                                    const textilePattern = new RegExp(`!${filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\([^)]*\\))?!`, 'g');
+                                    const textileEncodedPattern = new RegExp(`!${encoded.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\([^)]*\\))?!`, 'g');
+
+                                    // Check for Markdown image syntax: ![alt](attachment:filename) or ![alt](filename)
+                                    const markdownPattern = new RegExp(`!\\[[^\\]]*\\]\\((?:attachment:)?${filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`, 'g');
+                                    const markdownEncodedPattern = new RegExp(`!\\[[^\\]]*\\]\\((?:attachment:)?${encoded.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`, 'g');
+
+                                    return textilePattern.test(text) ||
+                                        textileEncodedPattern.test(text) ||
+                                        markdownPattern.test(text) ||
+                                        markdownEncodedPattern.test(text);
+                                };
+
+                                const filteredAttachments = selectedIssue.attachments?.filter(a => {
+                                    if (a.content_type?.startsWith('image/')) {
+                                        if (isImageReferenced(a.filename, currentDescription)) return false;
+                                    }
+                                    return true;
+                                }) || [];
+
+                                const filteredPending = pendingUploads.filter(u => {
+                                    if (u.content_type?.startsWith('image/')) {
+                                        // Check if tempUrl is used in markdown image syntax: ![](data:...) or textile !data:...!
+                                        const isTempInImage = u.tempUrl && (
+                                            currentDescription.includes(`](${u.tempUrl})`) ||
+                                            currentDescription.includes(`!${u.tempUrl}!`)
+                                        );
+
+                                        if (isTempInImage) return false;
+                                        if (isImageReferenced(u.filename, currentDescription)) return false;
+                                    }
+                                    return true;
+                                });
+
+                                return (
+                                    <div style={{ marginTop: 40, padding: '0 30px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+                                            <h3 style={{ fontSize: 13, fontWeight: 500, color: '#666', textTransform: 'uppercase', margin: 0 }}>Attachments</h3>
+                                            <label style={{
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: 6,
+                                                padding: '4px 10px',
+                                                borderRadius: 6,
+                                                border: '1px solid #222',
+                                                fontSize: 12,
+                                                cursor: isUploading ? 'not-allowed' : 'pointer',
+                                                color: '#0c66ff',
+                                                background: 'rgba(12, 102, 255, 0.05)'
+                                            }}>
+                                                {isUploading ? '⌛ 上传中...' : '📎 上传文件'}
+                                                <input
+                                                    type="file"
+                                                    multiple
+                                                    style={{ display: 'none' }}
+                                                    disabled={isUploading}
+                                                    onChange={async (e) => {
+                                                        const files = e.target.files;
+                                                        if (!files || files.length === 0) return;
+
+                                                        setIsUploading(true);
+                                                        try {
+                                                            for (let i = 0; i < files.length; i++) {
+                                                                const file = files[i];
+                                                                const result = await vm.uploadAttachment(file);
+                                                                if (result) {
+                                                                    if (editingDescription) {
+                                                                        // If editing, add to pending so it saves with the description
+                                                                        let tempUrl = '';
+                                                                        if (file.type.startsWith('image/')) {
+                                                                            tempUrl = await new Promise((resolve) => {
+                                                                                const reader = new FileReader();
+                                                                                reader.onload = (e) => resolve(e.target?.result as string);
+                                                                                reader.readAsDataURL(file);
+                                                                            });
+                                                                        }
+                                                                        setPendingUploads(prev => [...prev, {
+                                                                            token: result.token,
+                                                                            filename: file.name,
+                                                                            content_type: file.type,
+                                                                            tempUrl
+                                                                        }]);
+                                                                    } else {
+                                                                        // If not editing, save immediately to issue
+                                                                        await vm.updateIssue(selectedIssue.id, {
+                                                                            uploads: [{
+                                                                                token: result.token,
+                                                                                filename: file.name,
+                                                                                content_type: file.type
+                                                                            }]
+                                                                        });
+                                                                    }
+                                                                }
+                                                            }
+                                                        } finally {
+                                                            setIsUploading(false);
+                                                            e.target.value = ''; // Reset input
+                                                        }
+                                                    }}
+                                                />
+                                            </label>
+                                        </div>
+
+                                        {(filteredAttachments.length > 0 || filteredPending.length > 0) ? (
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 15 }}>
+                                                {filteredAttachments.map(a => (
+                                                    <div key={a.id} style={{ background: '#111', padding: '12px', borderRadius: 12, border: '1px solid #222', display: 'flex', alignItems: 'center', gap: 12 }}>
+                                                        <div style={{ width: 32, height: 32, background: 'var(--card-bg)', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>
+                                                            {a.content_type?.startsWith('image/') ? '🖼️' : '📎'}
+                                                        </div>
+                                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                                            <a href="#" onClick={(e) => { e.preventDefault(); downloadFile(a.content_url, a.filename); }} style={{ color: '#0c66ff', fontSize: 13, fontWeight: 500, textDecoration: 'none', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.filename}</a>
+                                                            <span style={{ fontSize: 11, color: '#555' }}>{(a.filesize / 1024).toFixed(1)} KB</span>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                                {filteredPending.map((u, idx) => (
+                                                    <div key={`pending-${idx}`} style={{ background: '#111', padding: '12px', borderRadius: 12, border: '1px dashed #0c66ff', display: 'flex', alignItems: 'center', gap: 12, opacity: 0.8 }}>
+                                                        <div style={{ width: 32, height: 32, background: 'var(--card-bg)', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>
+                                                            ⏳
+                                                        </div>
+                                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                                            <div style={{ color: '#0c66ff', fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.filename}</div>
+                                                            <span style={{ fontSize: 11, color: '#444' }}>Ready to save</span>
+                                                        </div>
+                                                        <button onClick={() => setPendingUploads(prev => prev.filter(item => item.token !== u.token))} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', padding: '0 5px', fontSize: 16 }}>✕</button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <div style={{ fontSize: 12, color: '#333', fontStyle: 'italic' }}>No attachments yet.</div>
+                                        )}
+                                    </div>
+                                );
+                            })()}
+
+                            <div style={{ marginTop: 40, padding: '0 30px' }}>
+                                <h3 style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', marginBottom: 20, textTransform: 'uppercase' }}>History</h3>
+                                {selectedIssue.journals?.filter((j: IssueJournal) => j.notes).slice().reverse().map((j: IssueJournal) => (
+                                    <div key={j.id} style={{ marginBottom: 25, paddingBottom: 20, borderBottom: '1px solid var(--border-color)' }}>
+                                        <div style={{ display: 'flex', gap: 10, fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
+                                            <strong style={{ color: 'var(--text-primary)', opacity: 0.8 }}>{j.user.name}</strong> • {format(new Date(j.created_on), 'MMM d, HH:mm')}
+                                        </div>
+                                        <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.6 }}>{renderMarkdownWithImages(j.notes || '')}</div>
+                                    </div>
+                                ))}
+                                {(!selectedIssue.journals || selectedIssue.journals.filter((j: any) => j.notes).length === 0) && (
+                                    <div style={{ color: 'var(--text-secondary)', fontSize: 13, fontStyle: 'italic', padding: '10px 0' }}>No history yet.</div>
+                                )}
+                            </div>
+                        </div>
+
+                        <NoteEditor issueId={selectedIssue.id} onAddNote={vm.addNote} />
+                    </div>
+                ) : (
+                    <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#222', fontSize: 14 }}>Select an issue</div>
+                )}
+            </main>
+
+            {/* Modals & Overlays */}
+            {lightboxImage && (
+                <div className="image-lightbox-overlay" onClick={() => { setLightboxImage(null); setLightboxOffset({ x: 0, y: 0 }); setLightboxScale(1); }}
+                    onMouseMove={(e) => {
+                        if (isDragging) {
+                            setLightboxOffset(o => ({
+                                x: o.x + e.movementX,
+                                y: o.y + e.movementY
+                            }));
+                        }
+                    }}
+                    onMouseUp={() => setIsDragging(false)}
+                    onMouseLeave={() => setIsDragging(false)}
+                >
+                    <AuthenticatedImage
+                        src={lightboxImage}
+                        alt="Enlarged"
+                        fetchBlob={(u) => vm.fetchImageBlob(u)}
+                        className="image-lightbox-content"
+                        style={{
+                            transform: `translate(${lightboxOffset.x}px, ${lightboxOffset.y}px) scale(${lightboxScale})`,
+                            cursor: isDragging ? 'grabbing' : 'grab',
+                            userSelect: 'none',
+                            pointerEvents: 'auto'
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); }}
+                    />
+                    <div className="image-lightbox-controls" onClick={e => e.stopPropagation()}>
+                        <button onClick={() => setLightboxScale(s => Math.max(0.25, s - 0.25))}>➖</button>
+                        <button onClick={() => { setLightboxScale(1); setLightboxOffset({ x: 0, y: 0 }); }}>重置</button>
+                        <button onClick={() => setLightboxScale(s => Math.min(4, s + 0.25))}>➕</button>
+                        <button onClick={() => { setLightboxImage(null); setLightboxOffset({ x: 0, y: 0 }); setLightboxScale(1); }}>✕</button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+export default App;
