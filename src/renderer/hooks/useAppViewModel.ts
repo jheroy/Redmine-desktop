@@ -270,6 +270,7 @@ export function useAppViewModel() {
                     return prev;
                 });
             }
+            setErrorMessage(null);
         } catch (e: any) {
             setErrorMessage(`Refresh failed: ${e.message}`);
         } finally {
@@ -309,6 +310,7 @@ export function useAppViewModel() {
                 allFetchedIssues.forEach(i => issueMap.set(i.id, i));
                 return Array.from(issueMap.values());
             });
+            setErrorMessage(null);
         } catch (e: any) {
             setErrorMessage(`Failed to fetch version issues: ${e.message}`);
         } finally {
