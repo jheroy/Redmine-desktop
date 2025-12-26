@@ -74,7 +74,14 @@ const UpdaterModal: React.FC<UpdaterModalProps> = ({ isOpen, onClose, isDark }) 
     }, []);
 
     const handleInstallUpdate = useCallback(async () => {
-        await window.updater?.installUpdate();
+        // 延迟一小段时间确保 UI 更新后再执行
+        setTimeout(async () => {
+            try {
+                await window.updater?.installUpdate();
+            } catch (e) {
+                console.error('Install failed:', e);
+            }
+        }, 100);
     }, []);
 
     const handleOpenReleasePage = useCallback(async () => {
@@ -91,8 +98,23 @@ const UpdaterModal: React.FC<UpdaterModalProps> = ({ isOpen, onClose, isDark }) 
 
     const formatReleaseNotes = (notes: string | { version: string; note: string }[] | undefined): string => {
         if (!notes) return '';
-        if (typeof notes === 'string') return notes;
-        return notes.map(n => `${n.version}: ${n.note}`).join('\n');
+        let text = '';
+        if (typeof notes === 'string') {
+            text = notes;
+        } else {
+            text = notes.map(n => `${n.version}: ${n.note}`).join('\n');
+        }
+        // 移除 HTML 标签
+        text = text.replace(/<[^>]*>/g, '');
+        // 解码 HTML 实体
+        text = text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"');
+        // 清理多余空白
+        text = text.replace(/\s+/g, ' ').trim();
+        // 如果内容太长，截断
+        if (text.length > 200) {
+            text = text.substring(0, 200) + '...';
+        }
+        return text || '查看发布页了解详情';
     };
 
     if (!isOpen) return null;

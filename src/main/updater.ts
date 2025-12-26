@@ -264,10 +264,16 @@ function setupIpcHandlers() {
             }
 
             log.info('Installing update and restarting...');
-            autoUpdater.quitAndInstall(false, true);
+
+            // 使用 setImmediate 确保 IPC 响应先返回
+            setImmediate(() => {
+                autoUpdater.quitAndInstall(false, true);
+            });
+
             return { success: true };
         } catch (error: any) {
             log.error('Failed to install update:', error);
+            sendToRenderer('update-error', { message: error.message });
             return {
                 success: false,
                 error: error.message
