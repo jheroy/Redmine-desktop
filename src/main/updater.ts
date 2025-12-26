@@ -265,10 +265,18 @@ function setupIpcHandlers() {
 
             log.info('Installing update and restarting...');
 
-            // 使用 setImmediate 确保 IPC 响应先返回
-            setImmediate(() => {
-                autoUpdater.quitAndInstall(false, true);
-            });
+            // 延迟执行以确保 IPC 响应返回
+            setTimeout(() => {
+                log.info('Calling quitAndInstall...');
+                try {
+                    // 设置 autoUpdater 在退出时自动安装
+                    autoUpdater.quitAndInstall(false, true);
+                } catch (e) {
+                    log.error('quitAndInstall error:', e);
+                    // 如果 quitAndInstall 失败，强制退出
+                    app.quit();
+                }
+            }, 500);
 
             return { success: true };
         } catch (error: any) {

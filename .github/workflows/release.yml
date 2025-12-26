@@ -27,39 +27,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
       
-      # 同时构建两个架构，这样 latest-mac.yml 只生成一次
-      - name: Build Electron app for both architectures
-        run: npm run build -- --mac --arm64 --x64
+      # 只构建 arm64
+      - name: Build Electron app
+        run: npm run build -- --mac --arm64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
-      
-      # Ad-hoc 签名以确保更新时签名一致
-      - name: Ad-hoc sign macOS apps
-        run: |
-          for app in release/*/mac*/Redmine.app release/*/mac/Redmine.app; do
-            if [ -d "$app" ]; then
-              echo "Signing $app"
-              codesign --force --deep --sign - "$app"
-            fi
-          done
-      
-      # 重新打包 zip 文件（签名后需要重新压缩）
-      - name: Repackage signed zips
-        run: |
-          cd release/*/
-          for dir in mac-arm64 mac; do
-            if [ -d "$dir" ]; then
-              arch_suffix=""
-              if [ "$dir" = "mac-arm64" ]; then
-                arch_suffix="-arm64"
-              fi
-              rm -f "Redmine-*${arch_suffix}-mac.zip" 2>/dev/null || true
-              cd "$dir"
-              zip -r -y "../Redmine-$(cat ../../package.json | grep version | head -1 | awk -F: '{ print $2 }' | sed 's/[",]//g' | tr -d ' ')${arch_suffix}-mac.zip" Redmine.app
-              cd ..
-            fi
-          done
       
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4

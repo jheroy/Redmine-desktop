@@ -1,7 +1,7 @@
 {
   "name": "redmine-desktop",
   "productName": "Redmine Desktop",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "author": "wenhuxian",
   "license": "MIT",
   "description": "Cross-platform Redmine client",
@@ -66,24 +66,20 @@
         {
           "target": "dmg",
           "arch": [
-            "arm64",
-            "x64"
+            "arm64"
           ]
         },
         {
           "target": "zip",
           "arch": [
-            "arm64",
-            "x64"
+            "arm64"
           ]
         }
       ],
-      "identity": "-",
+      "identity": null,
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
-      "signIgnore": [
-        "node_modules"
-      ]
+      "forceCodeSigning": false
     },
     "win": {
       "icon": "build/icon.png",
