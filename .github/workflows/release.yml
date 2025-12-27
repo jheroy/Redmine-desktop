@@ -76,7 +76,6 @@ jobs:
             release/*/*.blockmap
             release/*/latest.yml
 
-  # 创建 GitHub Release 并上传所有产物
   release:
     needs: [build-macos, build-windows]
     runs-on: ubuntu-latest
@@ -84,6 +83,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整 git 历史用于生成 release notes
       
       - name: Download macOS artifacts
         uses: actions/download-artifact@v4
@@ -107,7 +108,6 @@ jobs:
           ls -la release-files/
       
       - name: Generate Release Notes
-        id: release_notes
         run: |
           # 获取上一个 tag
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
@@ -117,22 +117,20 @@ jobs:
           echo "Current tag: $CURRENT_TAG"
           
           # 生成 release notes
+          echo "## 更新内容" > release-notes.md
+          echo "" >> release-notes.md
+          
           if [ -n "$PREV_TAG" ]; then
-            COMMITS=$(git log --pretty=format:"- %s (%h)" ${PREV_TAG}..HEAD)
+            git log --pretty=format:"- %s (%h)" ${PREV_TAG}..HEAD >> release-notes.md
+            echo "" >> release-notes.md
+            echo "" >> release-notes.md
+            echo "---" >> release-notes.md
+            echo "**完整更新日志**: [${PREV_TAG}...${CURRENT_TAG}](https://github.com/jheroy/Redmine-desktop/compare/${PREV_TAG}...${CURRENT_TAG})" >> release-notes.md
           else
-            COMMITS=$(git log --pretty=format:"- %s (%h)" -10)
+            git log --pretty=format:"- %s (%h)" -10 >> release-notes.md
           fi
           
-          # 写入到文件
-          cat > release-notes.md << EOF
-          ## 更新内容
-          
-          $COMMITS
-          
-          ---
-          **完整更新日志**: [$PREV_TAG...$CURRENT_TAG](https://github.com/jheroy/Redmine-desktop/compare/${PREV_TAG}...${CURRENT_TAG})
-          EOF
-          
+          echo ""
           echo "Generated release notes:"
           cat release-notes.md
       
