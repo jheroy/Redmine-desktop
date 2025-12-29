@@ -32,6 +32,24 @@ Redmine-Desktop provides a premium native-like experience for managing your Redm
 
 ### Installation
 
+**📦 Download Pre-built Binaries**
+
+Pre-built binaries are available on the [Releases](https://github.com/jheroy/Redmine-desktop/releases) page.
+
+**⚠️ macOS Installation Note**
+
+Due to macOS Gatekeeper security policies, applications downloaded from the internet that are not code-signed may show an error saying the app is "damaged" or "can't be opened".
+
+To fix this, run the following command in Terminal after installing:
+
+```bash
+xattr -cr /Applications/Redmine.app
+```
+
+This removes the quarantine attribute that macOS adds to downloaded files.
+
+**🛠️ Build from Source**
+
 1. Clone the repository:
    ```bash
    git clone <repository-url>
