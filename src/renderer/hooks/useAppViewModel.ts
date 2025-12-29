@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, startTransition } from 'reac
 import { RedmineService } from '../services/RedmineService';
 import { Project, Issue, Version, User, IssueStatus, IssuePriority } from '../models/redmine';
 import { format, subMonths } from 'date-fns';
+import { getAssignedWatchers, getAssignedWatchersField, createAssignedWatchersUpdate } from '../utils/assignedWatchers';
 
 export function useAppViewModel() {
     const [redmineURL, setRedmineURL] = useState(localStorage.getItem('redmineURL') || '');
@@ -62,8 +63,9 @@ export function useAppViewModel() {
         const saved = localStorage.getItem('groupByMode');
         return saved === 'assignee' ? 'assignee' : 'status';
     });
-    const [selectedWatcherIds, setSelectedWatcherIds] = useState<Set<number>>(() => {
-        const saved = localStorage.getItem('selectedWatcherIds');
+    // 协助者过滤
+    const [selectedAssignedWatcherIds, setSelectedAssignedWatcherIds] = useState<Set<number>>(() => {
+        const saved = localStorage.getItem('selectedAssignedWatcherIds');
         return saved ? new Set(JSON.parse(saved)) : new Set();
     });
     const [selectedStatusId, setSelectedStatusId] = useState<number | null>(null);
@@ -181,21 +183,35 @@ export function useAppViewModel() {
                 offset += limit;
             }
 
-            // Merge with existing issues - only update if content changed to prevent UI flicker
+            // 更新issues列表 - 使用服务器返回的数据，自动删除已不存在的issue
             setAllIssues(prev => {
-                const issueMap = new Map(prev.map(i => [i.id, i]));
+                // 创建新issue的map
+                const newIssueMap = new Map(allFetchedIssues.map(i => [i.id, i]));
+
+                // 检查本地缓存中的issue是否还在服务器上
+                const oldIssueMap = new Map(prev.map(i => [i.id, i]));
                 let changed = false;
-                allFetchedIssues.forEach(newIssue => {
-                    const oldIssue = issueMap.get(newIssue.id);
-                    // Check if content actually changed (by updated_on timestamp)
-                    if (!oldIssue || oldIssue.updated_on !== newIssue.updated_on) {
-                        issueMap.set(newIssue.id, newIssue);
+
+                // 检查是否有issue被删除
+                oldIssueMap.forEach((oldIssue, id) => {
+                    if (!newIssueMap.has(id)) {
+                        console.log(`[refreshIssues] Issue ${id} 已从服务器删除，从本地移除`);
                         changed = true;
                     }
                 });
+
+                // 检查是否有issue被更新或新增
+                allFetchedIssues.forEach(newIssue => {
+                    const oldIssue = oldIssueMap.get(newIssue.id);
+                    if (!oldIssue || oldIssue.updated_on !== newIssue.updated_on) {
+                        changed = true;
+                    }
+                });
+
                 if (changed) {
-                    const newIssues = Array.from(issueMap.values());
-                    // Save to localStorage cache
+                    const newIssues = allFetchedIssues;
+                    console.log(`[refreshIssues] 更新issues: ${newIssues.length}条 (之前${prev.length}条)`);
+                    // 保存到localStorage缓存
                     try {
                         localStorage.setItem('cachedIssues', JSON.stringify(newIssues));
                     } catch (e) {
@@ -458,11 +474,11 @@ export function useAppViewModel() {
         localStorage.setItem('refreshInterval', refreshInterval.toString());
         localStorage.setItem('showBadge', showBadge.toString());
         localStorage.setItem('pinnedVersionIds', JSON.stringify(Array.from(pinnedVersionIds)));
-        localStorage.setItem('selectedWatcherIds', JSON.stringify(Array.from(selectedWatcherIds)));
+        localStorage.setItem('selectedAssignedWatcherIds', JSON.stringify(Array.from(selectedAssignedWatcherIds)));
         localStorage.setItem('hideVerifiedInFollowed', hideVerifiedInFollowed.toString());
         localStorage.setItem('hideVerifiedInAssigned', hideVerifiedInAssigned.toString());
         localStorage.setItem('groupByMode', groupByMode);
-    }, [selectedProjectId, selectedVersionId, selectedAssigneeId, selectedWatcherIds, enableTransparency, appTheme, refreshInterval, showBadge, isConfigured, pinnedVersionIds, hideVerifiedInFollowed, hideVerifiedInAssigned, groupByMode]);
+    }, [selectedProjectId, selectedVersionId, selectedAssigneeId, selectedAssignedWatcherIds, enableTransparency, appTheme, refreshInterval, showBadge, isConfigured, pinnedVersionIds, hideVerifiedInFollowed, hideVerifiedInAssigned, groupByMode]);
 
     // Periodical Background Refresh
     useEffect(() => {
@@ -550,6 +566,61 @@ export function useAppViewModel() {
             await fetchIssueDetail(issueId);
         } catch (e: any) {
             setErrorMessage(`Failed to remove watcher: ${e.message}`);
+        }
+    };
+
+    // 协助者管理（通过自定义字段）
+    const addAssignedWatcher = async (issue: Issue, userId: number) => {
+        if (!service) return;
+        try {
+            // 获取当前协助者
+            const currentAssistants = getAssignedWatchers(issue);
+            const assistantIds = currentAssistants.map(a => a.id);
+
+            // 如果已存在则不添加
+            if (assistantIds.includes(userId)) {
+                return;
+            }
+
+            // 添加新协助者
+            assistantIds.push(userId);
+
+            // 获取自定义字段ID
+            const field = getAssignedWatchersField(issue);
+            if (!field) {
+                setErrorMessage('协助者自定义字段未找到');
+                return;
+            }
+
+            // 更新 Issue
+            const customFieldsUpdate = createAssignedWatchersUpdate(field.id, assistantIds);
+            await service.updateIssue(issue.id, { custom_fields: customFieldsUpdate });
+            await fetchIssueDetail(issue.id);
+        } catch (e: any) {
+            setErrorMessage(`Failed to add assigned watcher: ${e.message}`);
+        }
+    };
+
+    const removeAssignedWatcher = async (issue: Issue, userId: number) => {
+        if (!service) return;
+        try {
+            // 获取当前协助者
+            const currentAssistants = getAssignedWatchers(issue);
+            const assistantIds = currentAssistants.map(a => a.id).filter(id => id !== userId);
+
+            // 获取自定义字段ID
+            const field = getAssignedWatchersField(issue);
+            if (!field) {
+                setErrorMessage('协助者自定义字段未找到');
+                return;
+            }
+
+            // 更新 Issue
+            const customFieldsUpdate = createAssignedWatchersUpdate(field.id, assistantIds);
+            await service.updateIssue(issue.id, { custom_fields: customFieldsUpdate });
+            await fetchIssueDetail(issue.id);
+        } catch (e: any) {
+            setErrorMessage(`Failed to remove assigned watcher: ${e.message}`);
         }
     };
 
@@ -707,9 +778,12 @@ export function useAppViewModel() {
             const matchAssigned = !isMyAssigned || (currentUser && i.assigned_to?.id === currentUser.id);
 
             const matchVersion = !selectedVersionId || i.fixed_version?.id === selectedVersionId;
-            // Skip assignee and watcher filters in special views (My Followed, My Assigned)
+            // Skip assignee and assigned watcher filters in special views (My Followed, My Assigned)
             const matchAssignee = isSpecialView || !selectedAssigneeId || i.assigned_to?.id === selectedAssigneeId;
-            const matchWatchers = isSpecialView || selectedWatcherIds.size === 0 || followedIssueIds.has(i.id);
+            // 协助者过滤:如果选了协助者,则只显示包含该协助者的问题
+            const assignedWatchers = getAssignedWatchers(i);
+            const matchAssignedWatchers = isSpecialView || selectedAssignedWatcherIds.size === 0 ||
+                assignedWatchers.some(aw => selectedAssignedWatcherIds.has(aw.id));
             const matchStatus = !selectedStatusId || i.status.id === selectedStatusId;
             const matchQuery = !searchQuery ||
                 i.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -717,9 +791,9 @@ export function useAppViewModel() {
             // Hide verified issues in special views if toggle is on
             const shouldHideVerified = (isMyFollowed && hideVerifiedInFollowed) || (isMyAssigned && hideVerifiedInAssigned);
             const matchHideVerified = !shouldHideVerified || !i.status.name.includes('验证完成');
-            return matchProject && matchFollowed && matchAssigned && matchVersion && matchAssignee && matchWatchers && matchStatus && matchQuery && matchHideVerified;
+            return matchProject && matchFollowed && matchAssigned && matchVersion && matchAssignee && matchAssignedWatchers && matchStatus && matchQuery && matchHideVerified;
         });
-    }, [allIssues, selectedProjectId, selectedVersionId, selectedAssigneeId, selectedWatcherIds, selectedStatusId, searchQuery, followedIssueIds, currentUser, hideVerifiedInFollowed, hideVerifiedInAssigned]);
+    }, [allIssues, selectedProjectId, selectedVersionId, selectedAssigneeId, selectedAssignedWatcherIds, selectedStatusId, searchQuery, followedIssueIds, currentUser, hideVerifiedInFollowed, hideVerifiedInAssigned]);
 
     const statusSortMap = useMemo(() => {
         return issueStatuses.reduce((acc, s, idx) => ({ ...acc, [s.name]: idx }), {} as Record<string, number>);
@@ -792,11 +866,13 @@ export function useAppViewModel() {
         // Add from project members map (with groups)
         Object.values(projectMembersMap).flat().forEach(m => addUser(m, m.groups));
 
-        // Add from all fetched issues (assignees and authors - no group info)
+        // Add from all fetched issues (assignees, authors, and assigned watchers - no group info)
         allIssues.forEach(i => {
             addUser(i.assigned_to);
             addUser(i.author);
-            i.watchers?.forEach(w => addUser(w));
+            // 从自定义字段中获取协助者
+            const assignedWatchers = getAssignedWatchers(i);
+            assignedWatchers.forEach(aw => addUser(aw));
         });
 
         return Array.from(memberMap.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -817,8 +893,8 @@ export function useAppViewModel() {
         selectVersion,
         selectedAssigneeId,
         setSelectedAssigneeId,
-        selectedWatcherIds,
-        setSelectedWatcherIds,
+        selectedAssignedWatcherIds,
+        setSelectedAssignedWatcherIds,
         selectedStatusId,
         setSelectedStatusId,
         groupByMode,
@@ -831,8 +907,10 @@ export function useAppViewModel() {
         groupedIssues,
         updateIssue,
         addNote,
-        addWatcher,
-        removeWatcher,
+        addWatcher,         // 关注者
+        removeWatcher,      // 关注者
+        addAssignedWatcher,     // 协助者
+        removeAssignedWatcher,  // 协助者
         createIssue,
         refreshData: refreshIssues,
         redmineURL,

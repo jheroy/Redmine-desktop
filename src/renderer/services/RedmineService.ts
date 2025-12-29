@@ -60,6 +60,8 @@ export class RedmineService {
     }
 
     async fetchIssueDetail(issueId: number): Promise<Issue> {
+        // 包含 journals, attachments, watchers(关注者)
+        // 自定义字段（包括协助者）会自动包含在 Issue 响应中
         const response = await this.axios.get(`issues/${issueId}.json?include=journals,attachments,watchers`);
         return response.data.issue;
     }
@@ -77,6 +79,7 @@ export class RedmineService {
         await this.axios.delete(`issues/${issueId}.json`);
     }
 
+    // 关注者 API
     async addWatcher(issueId: number, userId: number): Promise<void> {
         await this.axios.post(`issues/${issueId}/watchers.json`, { user_id: userId });
     }

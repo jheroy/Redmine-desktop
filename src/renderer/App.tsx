@@ -8,6 +8,7 @@ import UpdaterModal from './components/UpdaterModal';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { marked } from 'marked';
+import { getAssignedWatchers } from './utils/assignedWatchers';
 
 
 const MemoIssueItem = React.memo(({
@@ -434,15 +435,15 @@ const App: React.FC = () => {
             }
         };
         document.addEventListener('mousedown', handleGlobalClick);
-        (window as any).toggleWatcherFilter = () => {
-            const dropdown = document.getElementById('watcher-filter-dropdown');
+        (window as any).toggleAssignedWatcherFilter = () => {
+            const dropdown = document.getElementById('assigned-watcher-filter-dropdown');
             if (dropdown) {
                 dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
             }
         };
         return () => {
             document.removeEventListener('mousedown', handleGlobalClick);
-            delete (window as any).toggleWatcherFilter;
+            delete (window as any).toggleAssignedWatcherFilter;
         };
     }, []);
 
@@ -1573,11 +1574,11 @@ const App: React.FC = () => {
                                     )}
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 5, position: 'relative' }}>
                                         协助者:
-                                        <div className="watcher-filter-trigger" style={{ background: 'var(--input-bg)', borderRadius: 4, padding: '1px 8px', fontSize: 11, cursor: 'pointer', color: 'var(--text-secondary)', border: vm.selectedWatcherIds.size > 0 ? '1px solid var(--accent-color)' : 'none' }} onClick={() => (window as any).toggleWatcherFilter?.()}>
-                                            {vm.selectedWatcherIds.size > 0 ? `${vm.selectedWatcherIds.size} 人` : '全部'}
+                                        <div className="assigned-watcher-filter-trigger" style={{ background: 'var(--input-bg)', borderRadius: 4, padding: '1px 8px', fontSize: 11, cursor: 'pointer', color: 'var(--text-secondary)', border: vm.selectedAssignedWatcherIds.size > 0 ? '1px solid var(--accent-color)' : 'none' }} onClick={() => (window as any).toggleAssignedWatcherFilter?.()}>
+                                            {vm.selectedAssignedWatcherIds.size > 0 ? `${vm.selectedAssignedWatcherIds.size} 人` : '全部'}
                                             <span style={{ marginLeft: 3 }}>⌄</span>
                                         </div>
-                                        <div id="watcher-filter-dropdown" style={{
+                                        <div id="assigned-watcher-filter-dropdown" style={{
                                             display: 'none',
                                             position: 'absolute',
                                             top: 22,
@@ -1615,13 +1616,13 @@ const App: React.FC = () => {
                                                     >
                                                         <input
                                                             type="checkbox"
-                                                            checked={vm.selectedWatcherIds.has(m.id)}
+                                                            checked={vm.selectedAssignedWatcherIds.has(m.id)}
                                                             style={{ cursor: 'pointer', accentColor: 'var(--accent-color)' }}
                                                             onChange={() => {
-                                                                const next = new Set(vm.selectedWatcherIds);
+                                                                const next = new Set(vm.selectedAssignedWatcherIds);
                                                                 if (next.has(m.id)) next.delete(m.id);
                                                                 else next.add(m.id);
-                                                                vm.setSelectedWatcherIds(next);
+                                                                vm.setSelectedAssignedWatcherIds(next);
                                                             }}
                                                         />
                                                         <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.name}</span>
@@ -1953,49 +1954,67 @@ const App: React.FC = () => {
                                     </select>
                                     <span style={{ position: 'absolute', right: 8, fontSize: 8, pointerEvents: 'none', color: 'var(--text-secondary)' }}>▼</span>
                                 </div>
-                                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                                    <select
-                                        value=""
-                                        onChange={async e => {
-                                            if (e.target.value) {
-                                                await vm.addWatcher(selectedIssue.id, parseInt(e.target.value));
-                                            }
-                                        }}
-                                        style={{
-                                            border: 'none',
-                                            color: 'var(--text-secondary)',
-                                            background: 'var(--button-secondary)',
-                                            borderRadius: 20,
-                                            padding: '3px 22px 3px 12px',
-                                            outline: 'none',
-                                            cursor: 'pointer',
-                                            fontSize: 11,
-                                            WebkitAppearance: 'none',
-                                            MozAppearance: 'none',
-                                            appearance: 'none',
-                                            width: 'fit-content'
-                                        }}
-                                    >
-                                        <option value="">＋ 添加协助者</option>
-                                        {renderGroupedMemberOptions(getProjectMembers(selectedIssue.project?.id), selectedIssue.watchers?.map(w => w.id))}
-                                    </select>
-                                    <span style={{ position: 'absolute', right: 8, fontSize: 8, pointerEvents: 'none', color: 'var(--text-secondary)' }}>▼</span>
-                                </div>
-                            </div>
-                            {selectedIssue.watchers && selectedIssue.watchers.length > 0 && (
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
-                                    {selectedIssue.watchers.map(w => (
-                                        <div key={w.id} style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: 12, fontSize: 11, color: 'var(--text-secondary)' }}>
-                                            <span>{w.name}</span>
-                                            <span
-                                                onClick={() => vm.removeWatcher(selectedIssue.id, w.id)}
-                                                style={{ cursor: 'pointer', opacity: 0.6, fontSize: 13 }}
-                                                title="移除协助者"
-                                            >×</span>
+                                {selectedIssue && (() => {
+                                    const assignedWatchers = getAssignedWatchers(selectedIssue);
+                                    return (
+                                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                                            <select
+                                                value=""
+                                                onChange={async e => {
+                                                    if (e.target.value) {
+                                                        await vm.addAssignedWatcher(selectedIssue, parseInt(e.target.value));
+                                                    }
+                                                }}
+                                                style={{
+                                                    border: 'none',
+                                                    color: 'var(--text-secondary)',
+                                                    background: 'var(--button-secondary)',
+                                                    borderRadius: 20,
+                                                    padding: '3px 22px 3px 12px',
+                                                    outline: 'none',
+                                                    cursor: 'pointer',
+                                                    fontSize: 11,
+                                                    WebkitAppearance: 'none',
+                                                    MozAppearance: 'none',
+                                                    appearance: 'none',
+                                                    width: 'fit-content'
+                                                }}
+                                            >
+                                                <option value="">＋ 添加协助者</option>
+                                                {renderGroupedMemberOptions(getProjectMembers(selectedIssue.project?.id), assignedWatchers.map(w => w.id))}
+                                            </select>
+                                            <span style={{ position: 'absolute', right: 8, fontSize: 8, pointerEvents: 'none', color: 'var(--text-secondary)' }}>▼</span>
                                         </div>
-                                    ))}
-                                </div>
-                            )}
+                                    )
+                                })()}
+                            </div>
+                            {(() => {
+                                const assignedWatchers = getAssignedWatchers(selectedIssue);
+
+                                // 从globalMembers中根据ID查找用户名
+                                const assignedWatchersWithNames = assignedWatchers.map(aw => {
+                                    const member = vm.globalMembers.find(m => m.id === aw.id);
+                                    return {
+                                        id: aw.id,
+                                        name: member ? member.name : `用户${aw.id}`
+                                    };
+                                });
+
+                                return assignedWatchersWithNames.length > 0 && (
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+                                        {assignedWatchersWithNames.map(w => (
+                                            <div key={w.id} style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: 12, fontSize: 11, color: 'var(--text-secondary)' }}>
+                                                <span>{w.name}</span>
+                                                <span
+                                                    onClick={() => vm.removeAssignedWatcher(selectedIssue, w.id)}
+                                                    style={{ cursor: 'pointer', opacity: 0.6, fontSize: 13 }}
+                                                    title="移除协助者"
+                                                >×</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )
+                            })()}
                             <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 15 }}>创建人：{selectedIssue.author.name} • 时间：{format(new Date(selectedIssue.created_on), 'yyyy-MM-dd HH:mm')}</div>
                         </div>
 
@@ -2240,46 +2259,49 @@ const App: React.FC = () => {
                     </div>
                 ) : (
                     <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#222', fontSize: 14 }}>Select an issue</div>
-                )}
-            </main>
+                )
+                }
+            </main >
 
             {/* Modals & Overlays */}
-            {lightboxImage && (
-                <div className="image-lightbox-overlay" onClick={() => { setLightboxImage(null); setLightboxOffset({ x: 0, y: 0 }); setLightboxScale(1); }}
-                    onMouseMove={(e) => {
-                        if (isDragging) {
-                            setLightboxOffset(o => ({
-                                x: o.x + e.movementX,
-                                y: o.y + e.movementY
-                            }));
-                        }
-                    }}
-                    onMouseUp={() => setIsDragging(false)}
-                    onMouseLeave={() => setIsDragging(false)}
-                >
-                    <AuthenticatedImage
-                        src={lightboxImage}
-                        alt="Enlarged"
-                        fetchBlob={(u) => vm.fetchImageBlob(u)}
-                        className="image-lightbox-content"
-                        style={{
-                            transform: `translate(${lightboxOffset.x}px, ${lightboxOffset.y}px) scale(${lightboxScale})`,
-                            cursor: isDragging ? 'grabbing' : 'grab',
-                            userSelect: 'none',
-                            pointerEvents: 'auto'
+            {
+                lightboxImage && (
+                    <div className="image-lightbox-overlay" onClick={() => { setLightboxImage(null); setLightboxOffset({ x: 0, y: 0 }); setLightboxScale(1); }}
+                        onMouseMove={(e) => {
+                            if (isDragging) {
+                                setLightboxOffset(o => ({
+                                    x: o.x + e.movementX,
+                                    y: o.y + e.movementY
+                                }));
+                            }
                         }}
-                        onClick={(e) => e.stopPropagation()}
-                        onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); }}
-                    />
-                    <div className="image-lightbox-controls" onClick={e => e.stopPropagation()}>
-                        <button onClick={() => setLightboxScale(s => Math.max(0.25, s - 0.25))}>➖</button>
-                        <button onClick={() => { setLightboxScale(1); setLightboxOffset({ x: 0, y: 0 }); }}>重置</button>
-                        <button onClick={() => setLightboxScale(s => Math.min(4, s + 0.25))}>➕</button>
-                        <button onClick={() => { setLightboxImage(null); setLightboxOffset({ x: 0, y: 0 }); setLightboxScale(1); }}>✕</button>
+                        onMouseUp={() => setIsDragging(false)}
+                        onMouseLeave={() => setIsDragging(false)}
+                    >
+                        <AuthenticatedImage
+                            src={lightboxImage}
+                            alt="Enlarged"
+                            fetchBlob={(u) => vm.fetchImageBlob(u)}
+                            className="image-lightbox-content"
+                            style={{
+                                transform: `translate(${lightboxOffset.x}px, ${lightboxOffset.y}px) scale(${lightboxScale})`,
+                                cursor: isDragging ? 'grabbing' : 'grab',
+                                userSelect: 'none',
+                                pointerEvents: 'auto'
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); }}
+                        />
+                        <div className="image-lightbox-controls" onClick={e => e.stopPropagation()}>
+                            <button onClick={() => setLightboxScale(s => Math.max(0.25, s - 0.25))}>➖</button>
+                            <button onClick={() => { setLightboxScale(1); setLightboxOffset({ x: 0, y: 0 }); }}>重置</button>
+                            <button onClick={() => setLightboxScale(s => Math.min(4, s + 0.25))}>➕</button>
+                            <button onClick={() => { setLightboxImage(null); setLightboxOffset({ x: 0, y: 0 }); setLightboxScale(1); }}>✕</button>
+                        </div>
                     </div>
-                </div>
-            )}
-        </div>
+                )
+            }
+        </div >
     );
 };
 

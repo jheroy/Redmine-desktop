@@ -63,6 +63,12 @@ export interface Attachment {
     created_on: string;
 }
 
+export interface CustomField {
+    id: number;
+    name: string;
+    value?: any;  // 可以是字符串、数组等
+}
+
 export interface Issue {
     id: number;
     project?: { id: number; name: string };
@@ -85,7 +91,8 @@ export interface Issue {
     closed_on?: string;
     journals?: IssueJournal[];
     attachments?: Attachment[];
-    watchers?: { id: number; name: string }[];
+    watchers?: { id: number; name: string }[];  // 关注者
+    custom_fields?: CustomField[];  // 自定义字段（包括协助者）
 }
 
 export interface IssueJournal {
