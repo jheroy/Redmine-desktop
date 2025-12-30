@@ -372,7 +372,7 @@ const App: React.FC = () => {
         let count = 0;
         const sync = () => {
             update();
-            if (count < 15) {
+            if (count < 30) { // Increased to 30 to handle longer layout shifts
                 count++;
                 rafId = requestAnimationFrame(sync);
             }
@@ -411,7 +411,7 @@ const App: React.FC = () => {
         let count = 0;
         const sync = () => {
             update();
-            if (count < 15) {
+            if (count < 30) { // Increased to 30
                 count++;
                 requestAnimationFrame(sync);
             }
@@ -420,9 +420,9 @@ const App: React.FC = () => {
     }, []);
 
     useEffect(() => {
-        const timer = setTimeout(updateSidebarIndicator, 10); // Reduced delay for faster response
+        const timer = setTimeout(updateSidebarIndicator, 10);
         return () => clearTimeout(timer);
-    }, [vm.selectedProjectId, vm.selectedVersionId, expandedProjects, vm.projects, vm.projectVersionsMap, updateSidebarIndicator, windowWidth, sidebarWidth]);
+    }, [vm.selectedProjectId, vm.selectedVersionId, expandedProjects, vm.projects, vm.projectVersionsMap, vm.activeVersionIds, updateSidebarIndicator, windowWidth, sidebarWidth]);
 
     useEffect(() => {
         const handleGlobalClick = (e: MouseEvent) => {
@@ -1264,9 +1264,9 @@ const App: React.FC = () => {
 
                     {vm.projects.map(p => {
                         const versions = vm.projectVersionsMap[p.id] || [];
-                        // Use initialVersionsWithIssues for stable categorization (doesn't change when fetching Others versions)
-                        const activeVersions = versions.filter(v => vm.initialVersionsWithIssues.has(v.id));
-                        const emptyVersions = versions.filter(v => !vm.initialVersionsWithIssues.has(v.id));
+                        // Use activeVersionIds to determine which versions are active vs in Others
+                        const activeVersions = versions.filter(v => vm.activeVersionIds.has(v.id));
+                        const emptyVersions = versions.filter(v => !vm.activeVersionIds.has(v.id));
 
                         return (
                             <div key={p.id}>
@@ -1353,6 +1353,12 @@ const App: React.FC = () => {
                                                         {sc.dev > 0 && <span style={{ color: '#ff453a' }}>{sc.dev}</span>}
                                                         {sc.done > 0 && <span style={{ color: '#30d158' }}>{sc.done}</span>}
                                                         {sc.verified > 0 && <span style={{ color: '#666' }}>{sc.verified}</span>}
+                                                        {/* Move to Others button */}
+                                                        <span
+                                                            onClick={(e) => { e.stopPropagation(); vm.toggleVersionActive(v.id); }}
+                                                            style={{ color: 'var(--text-secondary)', fontSize: 11, padding: '0 3px', cursor: 'pointer', opacity: 0.6 }}
+                                                            title="移入 Others"
+                                                        >↓</span>
                                                         {totalCount === 0 && (
                                                             <span
                                                                 onClick={(e) => { e.stopPropagation(); setDeleteVersionConfirm({ projectId: p.id, versionId: v.id, name: v.name }); }}
@@ -1436,13 +1442,21 @@ const App: React.FC = () => {
                                                                     </span>
                                                                 )}
                                                             </div>
-                                                            {(vm.versionIssueCounts[v.id] || 0) === 0 && (
+                                                            <span style={{ fontSize: 10, display: 'flex', gap: 4, alignItems: 'center' }}>
+                                                                {/* Move out of Others button */}
                                                                 <span
-                                                                    onClick={(e) => { e.stopPropagation(); setDeleteVersionConfirm({ projectId: p.id, versionId: v.id, name: v.name }); }}
-                                                                    style={{ color: '#ff453a', fontSize: 12, padding: '0 5px', cursor: 'pointer' }}
-                                                                    title="删除版本"
-                                                                >×</span>
-                                                            )}
+                                                                    onClick={(e) => { e.stopPropagation(); vm.toggleVersionActive(v.id); }}
+                                                                    style={{ color: '#30d158', fontSize: 11, padding: '0 3px', cursor: 'pointer' }}
+                                                                    title="移出 Others (激活)"
+                                                                >↑</span>
+                                                                {(vm.versionIssueCounts[v.id] || 0) === 0 && (
+                                                                    <span
+                                                                        onClick={(e) => { e.stopPropagation(); setDeleteVersionConfirm({ projectId: p.id, versionId: v.id, name: v.name }); }}
+                                                                        style={{ color: '#ff453a', fontSize: 12, padding: '0 5px', cursor: 'pointer' }}
+                                                                        title="删除版本"
+                                                                    >×</span>
+                                                                )}
+                                                            </span>
                                                         </div>
                                                     );
                                                 })}

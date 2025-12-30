@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, startTransition } from 'react';
 import { RedmineService } from '../services/RedmineService';
 import { Project, Issue, Version, User, IssueStatus, IssuePriority } from '../models/redmine';
-import { format, subMonths } from 'date-fns';
 import { getAssignedWatchers, getAssignedWatchersField, createAssignedWatchersUpdate } from '../utils/assignedWatchers';
 
 export function useAppViewModel() {
@@ -34,10 +33,20 @@ export function useAppViewModel() {
         const saved = localStorage.getItem('pinnedVersionIds');
         return saved ? new Set(JSON.parse(saved)) : new Set();
     });
-    // Track which versions had issues in initial load (for stable Others categorization)
-    const [initialVersionsWithIssues, setInitialVersionsWithIssues] = useState<Set<number>>(() => {
+    // Track which versions are "active" (should be loaded and auto-refreshed)
+    // Default: top 3 versions by name (descending) + user-added versions
+    const [activeVersionIds, setActiveVersionIds] = useState<Set<number>>(() => {
         try {
-            const cached = localStorage.getItem('cachedInitialVersionsWithIssues');
+            const cached = localStorage.getItem('cachedActiveVersionIds');
+            return cached ? new Set(JSON.parse(cached)) : new Set();
+        } catch {
+            return new Set();
+        }
+    });
+    // Track if we've initialized active versions for each project
+    const [initializedProjects, setInitializedProjects] = useState<Set<number>>(() => {
+        try {
+            const cached = localStorage.getItem('cachedInitializedProjects');
             return cached ? new Set(JSON.parse(cached)) : new Set();
         } catch {
             return new Set();
@@ -113,30 +122,43 @@ export function useAppViewModel() {
             setIssuePriorities(priorities);
             setProjects(projectsData);
 
-            // Pre-fetch details (versions/members) for all projects to populate the sidebar tree
-            // Use allSettled so one project's failure (e.g. 403 Forbidden) doesn't stop others
+            // Fetch versions and members for all projects
             await Promise.allSettled(projectsData.map(async p => {
                 try {
                     const [versions, members] = await Promise.all([
                         service.fetchVersions(p.id),
                         service.fetchAssignableUsers(p.id)
                     ]);
-                    setProjectVersionsMap(prev => ({
-                        ...prev,
-                        [p.id]: versions.sort((a, b) => {
-                            // 1. Pinned versions first
-                            const aPinned = pinnedVersionIds.has(a.id);
-                            const bPinned = pinnedVersionIds.has(b.id);
-                            if (aPinned !== bPinned) return aPinned ? -1 : 1;
-                            // 2. Number-starting versions next
-                            const aIsDigit = /^\d/.test(a.name);
-                            const bIsDigit = /^\d/.test(b.name);
-                            if (aIsDigit !== bIsDigit) return aIsDigit ? -1 : 1;
-                            // 3. Descending numeric-aware sort
-                            return b.name.localeCompare(a.name, undefined, { numeric: true });
-                        })
-                    }));
+
+                    const sortedVersions = versions.sort((a, b) => {
+                        const aPinned = pinnedVersionIds.has(a.id);
+                        const bPinned = pinnedVersionIds.has(b.id);
+                        if (aPinned !== bPinned) return aPinned ? -1 : 1;
+                        const aIsDigit = /^\d/.test(a.name);
+                        const bIsDigit = /^\d/.test(b.name);
+                        if (aIsDigit !== bIsDigit) return aIsDigit ? -1 : 1;
+                        return b.name.localeCompare(a.name, undefined, { numeric: true });
+                    });
+
+                    setProjectVersionsMap(prev => ({ ...prev, [p.id]: sortedVersions }));
                     setProjectMembersMap(prev => ({ ...prev, [p.id]: members }));
+
+                    // Functional update to avoid dependency on initializedProjects/activeVersionIds
+                    setInitializedProjects(prevInitialized => {
+                        if (prevInitialized.has(p.id)) return prevInitialized;
+
+                        const newInitialized = new Set(prevInitialized);
+                        newInitialized.add(p.id);
+
+                        setActiveVersionIds(prevActive => {
+                            const newActive = new Set(prevActive);
+                            const top3Versions = sortedVersions.slice(0, 3);
+                            top3Versions.forEach(v => newActive.add(v.id));
+                            return newActive;
+                        });
+
+                        return newInitialized;
+                    });
                 } catch (e) {
                     console.error(`Failed to fetch details for project ${p.id}`, e);
                 }
@@ -147,94 +169,88 @@ export function useAppViewModel() {
             setIsLoading(false);
             return;
         }
-        // Continue with refreshIssues after initial data is loaded
         setIsLoading(false);
         setIsConfigured(true);
-    }, [service]);
+    }, [service, pinnedVersionIds]);
 
     const refreshIssues = useCallback(async () => {
         if (!service) return;
         setIsBackgroundRefreshing(true);
         try {
-            const oneMonthAgo = format(subMonths(new Date(), 1), 'yyyy-MM-dd');
+            // Fetch issues for all active versions only
+            const activeVersionArray = Array.from(activeVersionIds);
+            console.log(`[refreshIssues] Refreshing ${activeVersionArray.length} active versions`);
+
             let allFetchedIssues: Issue[] = [];
-            let offset = 0;
-            const limit = 100; // Redmine API standard max
 
-            while (true) {
-                const params: any = {
-                    status_id: '*',
-                    updated_on: `>=${oneMonthAgo}`,
-                    sort: 'updated_on:desc',
-                    // Note: Don't include journals,attachments,watchers here - too slow for list refresh
-                    // These will be fetched on-demand when viewing issue details
-                    limit,
-                    offset
-                };
+            // Fetch issues for each active version
+            for (const versionId of activeVersionArray) {
+                let offset = 0;
+                const limit = 100;
+                while (true) {
+                    const { issues, total_count } = await service.fetchIssues({
+                        fixed_version_id: versionId,
+                        status_id: '*',
+                        limit,
+                        offset
+                    });
+                    allFetchedIssues = [...allFetchedIssues, ...issues];
 
-                const { issues, total_count } = await service.fetchIssues(params);
-                allFetchedIssues = [...allFetchedIssues, ...issues];
-
-                console.log(`Fetched page (offset ${offset}): ${issues.length} issues. Total so far: ${allFetchedIssues.length}/${total_count}`);
-
-                if (allFetchedIssues.length >= total_count || issues.length < limit || allFetchedIssues.length >= 1000) {
-                    break;
+                    if (allFetchedIssues.length >= total_count || issues.length < limit) {
+                        break;
+                    }
+                    offset += limit;
                 }
-                offset += limit;
             }
 
-            // 更新issues列表 - 使用服务器返回的数据，自动删除已不存在的issue
+            console.log(`[refreshIssues] Fetched ${allFetchedIssues.length} issues from ${activeVersionArray.length} active versions`);
+
+            // 更新issues列表 - 合并活跃版本的issues，保留旧issue的详情字段（attachments, journals等）
             setAllIssues(prev => {
-                // 创建新issue的map
-                const newIssueMap = new Map(allFetchedIssues.map(i => [i.id, i]));
+                const refreshedVersionIds = new Set(activeVersionArray);
+                const fetchedIssueMap = new Map(allFetchedIssues.map(i => [i.id, i]));
 
-                // 检查本地缓存中的issue是否还在服务器上
-                const oldIssueMap = new Map(prev.map(i => [i.id, i]));
-                let changed = false;
+                // 1. 保留那些不属于刚刚刷新的版本的 issue
+                const preservedIssues = prev.filter(i =>
+                    !i.fixed_version?.id || !refreshedVersionIds.has(i.fixed_version.id)
+                );
 
-                // 检查是否有issue被删除
-                oldIssueMap.forEach((oldIssue, id) => {
-                    if (!newIssueMap.has(id)) {
-                        console.log(`[refreshIssues] Issue ${id} 已从服务器删除，从本地移除`);
-                        changed = true;
-                    }
-                });
+                // 2. 对于属于已刷新版本的 issue，只有在 fetchedIssueMap 中存在的才保留（即合并更新），不存在的说明已删除或移出版本
+                // 但要注意：我们不能简单 filter，因为 preservedIssues 已经移除了所有活跃版本的 issue。
+                // 我们应该从 prev 中找出活跃版本的 issue，如果它们在 fetchedIssueMap 中，则进行合并更新。
+                const existingActiveIssues = prev.filter(i =>
+                    i.fixed_version?.id && refreshedVersionIds.has(i.fixed_version.id)
+                );
 
-                // 检查是否有issue被更新或新增
-                allFetchedIssues.forEach(newIssue => {
-                    const oldIssue = oldIssueMap.get(newIssue.id);
-                    if (!oldIssue || oldIssue.updated_on !== newIssue.updated_on) {
-                        changed = true;
-                    }
-                });
+                const mergedActiveIssues = existingActiveIssues
+                    .filter(oldIssue => fetchedIssueMap.has(oldIssue.id))
+                    .map(oldIssue => {
+                        const newIssue = fetchedIssueMap.get(oldIssue.id)!;
+                        // 智能合并：保留附件、日志、关注者等可能只有详情接口才有的字段
+                        return {
+                            ...newIssue,
+                            attachments: newIssue.attachments || oldIssue.attachments,
+                            journals: newIssue.journals || oldIssue.journals,
+                            watchers: newIssue.watchers || oldIssue.watchers,
+                            custom_fields: newIssue.custom_fields || oldIssue.custom_fields
+                        };
+                    });
 
-                if (changed) {
-                    const newIssues = allFetchedIssues;
-                    console.log(`[refreshIssues] 更新issues: ${newIssues.length}条 (之前${prev.length}条)`);
-                    // 保存到localStorage缓存
-                    try {
-                        localStorage.setItem('cachedIssues', JSON.stringify(newIssues));
-                    } catch (e) {
-                        console.warn('Failed to cache issues:', e);
-                    }
-                    return newIssues;
-                }
-                return prev;
-            });
-            // Record which versions have issues for stable Others categorization
-            // Add to existing set, don't replace (to prevent versions moving to Others on refresh)
-            const newVersionIds: number[] = [];
-            allFetchedIssues.forEach(i => { if (i.fixed_version?.id) newVersionIds.push(i.fixed_version.id); });
-            setInitialVersionsWithIssues(prev => {
-                const updated = new Set(prev);
-                newVersionIds.forEach(id => updated.add(id));
-                // Save to localStorage cache
+                // 3. 找出全新的 issue（在 fetchedIssueMap 中但不在 existingActiveIssues 中）
+                const activeIssueIds = new Set(existingActiveIssues.map(i => i.id));
+                const brandNewIssues = allFetchedIssues.filter(i => !activeIssueIds.has(i.id));
+
+                const newIssuesList = [...preservedIssues, ...mergedActiveIssues, ...brandNewIssues];
+
+                console.log(`[refreshIssues] 更新后 issues 总数: ${newIssuesList.length} (原: ${prev.length})`);
+
+                // 保存到localStorage缓存
                 try {
-                    localStorage.setItem('cachedInitialVersionsWithIssues', JSON.stringify(Array.from(updated)));
+                    localStorage.setItem('cachedIssues', JSON.stringify(newIssuesList));
                 } catch (e) {
-                    console.warn('Failed to cache version IDs:', e);
+                    console.warn('Failed to cache issues:', e);
                 }
-                return updated;
+                return newIssuesList;
             });
 
             // Fetch followed issues using watcher_id filter (much faster than individual requests)
@@ -265,13 +281,24 @@ export function useAppViewModel() {
                 } catch (e) {
                     console.warn('Failed to cache followed IDs:', e);
                 }
-                // Merge followed issues into allIssues (some might not be in the recent 1 month window)
+                // Merge followed issues into allIssues (some might not be in active versions)
                 setAllIssues(prev => {
                     const issueMap = new Map(prev.map(i => [i.id, i]));
                     let changed = false;
                     followedIssuesList.forEach(fi => {
-                        if (!issueMap.has(fi.id)) {
+                        const existing = issueMap.get(fi.id);
+                        if (!existing) {
                             issueMap.set(fi.id, fi);
+                            changed = true;
+                        } else {
+                            // Smart merge to keep details if any
+                            issueMap.set(fi.id, {
+                                ...fi,
+                                attachments: fi.attachments || existing.attachments,
+                                journals: fi.journals || existing.journals,
+                                watchers: fi.watchers || existing.watchers,
+                                custom_fields: fi.custom_fields || existing.custom_fields
+                            });
                             changed = true;
                         }
                     });
@@ -293,7 +320,7 @@ export function useAppViewModel() {
         } finally {
             setIsBackgroundRefreshing(false);
         }
-    }, [service, currentUser]); // Badge updates handled by reactive useEffect
+    }, [service, currentUser, activeVersionIds]); // Badge updates handled by reactive useEffect
 
     // Fetch issues for a specific version (for Others section)
     const fetchVersionIssues = useCallback(async (versionId: number) => {
@@ -321,10 +348,23 @@ export function useAppViewModel() {
             }
 
             console.log(`Fetched ${allFetchedIssues.length} issues for version ${versionId}`);
-            // Merge with existing issues, avoiding duplicates
+            // Merge with existing issues, avoiding duplicates and preserving details
             setAllIssues(prev => {
                 const issueMap = new Map(prev.map(i => [i.id, i]));
-                allFetchedIssues.forEach(i => issueMap.set(i.id, i));
+                allFetchedIssues.forEach(i => {
+                    const existing = issueMap.get(i.id);
+                    if (existing) {
+                        issueMap.set(i.id, {
+                            ...i,
+                            attachments: i.attachments || existing.attachments,
+                            journals: i.journals || existing.journals,
+                            watchers: i.watchers || existing.watchers,
+                            custom_fields: i.custom_fields || existing.custom_fields
+                        });
+                    } else {
+                        issueMap.set(i.id, i);
+                    }
+                });
                 return Array.from(issueMap.values());
             });
             setErrorMessage(null);
@@ -478,7 +518,9 @@ export function useAppViewModel() {
         localStorage.setItem('hideVerifiedInFollowed', hideVerifiedInFollowed.toString());
         localStorage.setItem('hideVerifiedInAssigned', hideVerifiedInAssigned.toString());
         localStorage.setItem('groupByMode', groupByMode);
-    }, [selectedProjectId, selectedVersionId, selectedAssigneeId, selectedAssignedWatcherIds, enableTransparency, appTheme, refreshInterval, showBadge, isConfigured, pinnedVersionIds, hideVerifiedInFollowed, hideVerifiedInAssigned, groupByMode]);
+        localStorage.setItem('cachedActiveVersionIds', JSON.stringify(Array.from(activeVersionIds)));
+        localStorage.setItem('cachedInitializedProjects', JSON.stringify(Array.from(initializedProjects)));
+    }, [selectedProjectId, selectedVersionId, selectedAssigneeId, selectedAssignedWatcherIds, enableTransparency, appTheme, refreshInterval, showBadge, isConfigured, pinnedVersionIds, hideVerifiedInFollowed, hideVerifiedInAssigned, groupByMode, activeVersionIds, initializedProjects]);
 
     // Periodical Background Refresh
     useEffect(() => {
@@ -736,6 +778,29 @@ export function useAppViewModel() {
         });
     }, [sortVersions]);
 
+    // Toggle a version's active status (move into/out of Others)
+    const toggleVersionActive = useCallback(async (versionId: number) => {
+        let activating = false;
+        setActiveVersionIds(prev => {
+            const next = new Set(prev);
+            if (next.has(versionId)) {
+                next.delete(versionId);
+                activating = false;
+            } else {
+                next.add(versionId);
+                activating = true;
+            }
+            return next;
+        });
+
+        if (activating) {
+            console.log(`[toggleVersionActive] Version ${versionId} activated, fetching issues...`);
+            await fetchVersionIssues(versionId);
+        } else {
+            console.log(`[toggleVersionActive] Version ${versionId} moved to Others`);
+        }
+    }, [fetchVersionIssues]);
+
     const deleteIssue = async (issueId: number) => {
         if (!service) return;
         try {
@@ -922,7 +987,9 @@ export function useAppViewModel() {
         fetchImageBlob: (url: string) => service?.fetchImageBlob(url),
         versionIssueCounts,
         versionStatusCounts,
-        initialVersionsWithIssues,
+        activeVersionIds,
+        setActiveVersionIds,
+        toggleVersionActive,
         allIssues,
         fetchIssueDetail,
         fetchVersionIssues,
