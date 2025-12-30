@@ -186,8 +186,8 @@ const NoteEditor: React.FC<{ issueId: number, onAddNote: (id: number, text: stri
     };
 
     return (
-        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '20px 30px', background: 'var(--editor-bg)', backdropFilter: 'blur(20px)', borderTop: '1px solid var(--editor-border)', zIndex: 10 }}>
-            <div style={{ position: 'relative' }}>
+        <div className="note-editor-bar pane-footer">
+            <div style={{ position: 'relative', flex: 1 }}>
                 <textarea
                     className="note-input"
                     value={noteText}
@@ -199,9 +199,9 @@ const NoteEditor: React.FC<{ issueId: number, onAddNote: (id: number, text: stri
                         }
                     }}
                     placeholder="Add a note... (Shift + Enter to send)"
-                    style={{ width: '100%', height: 44, background: 'var(--input-bg)', border: '1px solid var(--input-border)', borderRadius: 12, padding: '12px 50px 12px 15px', color: 'var(--text-primary)', resize: 'none', fontSize: 13, transition: 'all 0.2s' }}
+                    style={{ width: '100%', height: 36, display: 'block', background: 'rgba(255,255,255,0.05)', border: 'none', borderRadius: 8, padding: '9px 50px 9px 15px', color: 'var(--text-primary)', resize: 'none', fontSize: 13, transition: 'all 0.2s', outline: 'none' }}
                     onFocus={e => (e.target as any).style.height = '100px'}
-                    onBlur={e => { if (!noteText) (e.target as any).style.height = '44px' }}
+                    onBlur={e => { if (!noteText) (e.target as any).style.height = '36px' }}
                 />
                 <button
                     onClick={handleSend}
@@ -1470,22 +1470,22 @@ const App: React.FC = () => {
                 </div>
 
                 {/* Sidebar Footer with Settings */}
-                <div style={{ padding: '15px', borderTop: '1px solid #222', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div className="pane-footer" style={{ borderTop: '1px solid var(--border-color)' }}>
                     <div
                         className="sidebar-item"
                         onClick={() => setShowSettings(true)}
-                        style={{ margin: 0, padding: '8px 12px', flex: 1, textAlign: 'center', background: 'rgba(255,255,255,0.05)', borderRadius: 8, fontSize: 13 }}
+                        style={{ margin: 0, padding: 0, flex: 1, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.05)', borderRadius: 8, fontSize: 13 }}
                     >
                         ⚙️ Settings
                     </div>
                 </div>
             </aside>
 
-            {/* Sidebar Resize Handle */}
             <div
+                className="no-drag"
                 onMouseDown={() => setResizingPane('sidebar')}
-                style={{ width: 4, cursor: 'col-resize', background: resizingPane === 'sidebar' ? '#0c66ff' : 'transparent', flexShrink: 0 }}
-                onMouseEnter={e => (e.target as HTMLDivElement).style.background = '#333'}
+                style={{ width: 4, cursor: 'col-resize', background: resizingPane === 'sidebar' ? '#0c66ff' : 'transparent', flexShrink: 0, margin: '0 -2px', zIndex: 100, transition: 'background 0.2s' }}
+                onMouseEnter={e => (e.target as HTMLDivElement).style.background = '#0c66ff'}
                 onMouseLeave={e => (e.target as HTMLDivElement).style.background = resizingPane === 'sidebar' ? '#0c66ff' : 'transparent'}
             />
 
@@ -1705,7 +1705,7 @@ const App: React.FC = () => {
 
                 <div
                     ref={issueListRef}
-                    style={{ overflowY: 'auto', flex: 1, paddingBottom: 60, position: 'relative' }}
+                    style={{ overflowY: 'auto', flex: 1, paddingBottom: 20, position: 'relative' }}
                 >
                     <div className="issue-list-content" ref={listRef}>
                         {/* Sliding Selection Indicator */}
@@ -1778,64 +1778,66 @@ const App: React.FC = () => {
                     </div>
                 </div>
 
-                <div className="add-task-bar" style={{ position: 'absolute', bottom: 0, left: 0, right: 0 }}>
-                    <span style={{ color: '#0c66ff', fontSize: 20, cursor: 'pointer' }}>+</span>
-                    <input type="text" placeholder="快速添加任务..." value={newTaskSubject} onChange={e => setNewTaskSubject(e.target.value)} onKeyDown={e => {
-                        if (e.key === 'Enter' && newTaskSubject.trim() && vm.selectedProjectId !== -1) {
-                            vm.createIssue(newTaskSubject, vm.selectedProjectId!, quickAddVersionId || undefined, quickAddAssigneeId || undefined);
-                            setNewTaskSubject('');
-                        }
-                    }} style={{ flex: 1, background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: 8 }} />
-                    <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                        {vm.selectedProjectId !== -1 && vm.selectedProjectId !== null && (
+                <div className="add-task-bar pane-footer">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: '0 12px', flex: 1, height: 36 }}>
+                        <span style={{ color: '#0c66ff', fontSize: 18, cursor: 'pointer', display: 'flex', alignItems: 'center' }}>+</span>
+                        <input type="text" placeholder="快速添加任务..." value={newTaskSubject} onChange={e => setNewTaskSubject(e.target.value)} onKeyDown={e => {
+                            if (e.key === 'Enter' && newTaskSubject.trim() && vm.selectedProjectId !== -1) {
+                                vm.createIssue(newTaskSubject, vm.selectedProjectId!, quickAddVersionId || undefined, quickAddAssigneeId || undefined);
+                                setNewTaskSubject('');
+                            }
+                        }} style={{ flex: 1, background: 'transparent', border: 'none', color: 'var(--text-primary)', padding: '4px 0', fontSize: 13, outline: 'none' }} />
+                        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                            {vm.selectedProjectId !== -1 && vm.selectedProjectId !== null && (
+                                <span style={{ fontSize: 11, color: '#888', position: 'relative' }}>
+                                    {(vm.projectVersionsMap[vm.selectedProjectId] || []).find((v: { id: number }) => v.id === quickAddVersionId)?.name || '无版本'}
+                                    <select
+                                        value={quickAddVersionId || ''}
+                                        onChange={e => setQuickAddVersionId(e.target.value ? parseInt(e.target.value) : null)}
+                                        style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                                    >
+                                        <option value="">无版本</option>
+                                        {(vm.projectVersionsMap[vm.selectedProjectId] || []).map((v: { id: number; name: string }) => (
+                                            <option key={v.id} value={v.id}>{v.name}</option>
+                                        ))}
+                                    </select>
+                                    <span style={{ marginLeft: 3, fontSize: 10, color: '#666' }}>⌄</span>
+                                </span>
+                            )}
                             <span style={{ fontSize: 11, color: '#888', position: 'relative' }}>
-                                {(vm.projectVersionsMap[vm.selectedProjectId] || []).find((v: { id: number }) => v.id === quickAddVersionId)?.name || '无版本'}
+                                {quickAddAssigneeId === null
+                                    ? '👤 暂未指派'
+                                    : currentProjectMembers.find(m => m.id === quickAddAssigneeId)?.name || '👤 暂未指派'}
                                 <select
-                                    value={quickAddVersionId || ''}
-                                    onChange={e => setQuickAddVersionId(e.target.value ? parseInt(e.target.value) : null)}
+                                    value={quickAddAssigneeId || ''}
+                                    onChange={e => setQuickAddAssigneeId(e.target.value ? parseInt(e.target.value) : null)}
                                     style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
                                 >
-                                    <option value="">无版本</option>
-                                    {(vm.projectVersionsMap[vm.selectedProjectId] || []).map((v: { id: number; name: string }) => (
-                                        <option key={v.id} value={v.id}>{v.name}</option>
-                                    ))}
+                                    <option value="">👤 暂未指派</option>
+                                    {renderGroupedMemberOptions(currentProjectMembers)}
                                 </select>
                                 <span style={{ marginLeft: 3, fontSize: 10, color: '#666' }}>⌄</span>
                             </span>
+                        </div>
+                        {vm.selectedProjectId === -1 && (
+                            <div style={{ fontSize: 11, color: '#444' }}>请选择项目</div>
                         )}
-                        <span style={{ fontSize: 11, color: '#888', position: 'relative' }}>
-                            {quickAddAssigneeId === null
-                                ? '👤 暂未指派'
-                                : currentProjectMembers.find(m => m.id === quickAddAssigneeId)?.name || '👤 暂未指派'}
-                            <select
-                                value={quickAddAssigneeId || ''}
-                                onChange={e => setQuickAddAssigneeId(e.target.value ? parseInt(e.target.value) : null)}
-                                style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
-                            >
-                                <option value="">👤 暂未指派</option>
-                                {renderGroupedMemberOptions(currentProjectMembers)}
-                            </select>
-                            <span style={{ marginLeft: 3, fontSize: 10, color: '#666' }}>⌄</span>
-                        </span>
                     </div>
-                    {vm.selectedProjectId === -1 && (
-                        <div style={{ fontSize: 11, color: '#444' }}>请选择项目</div>
-                    )}
                 </div>
             </section>
 
-            {/* List Resize Handle */}
             <div
+                className="no-drag"
                 onMouseDown={() => setResizingPane('list')}
-                style={{ width: 4, cursor: 'col-resize', background: resizingPane === 'list' ? '#0c66ff' : 'transparent', flexShrink: 0 }}
-                onMouseEnter={e => (e.target as HTMLDivElement).style.background = '#333'}
+                style={{ width: 4, cursor: 'col-resize', background: resizingPane === 'list' ? '#0c66ff' : 'transparent', flexShrink: 0, margin: '0 -2px', zIndex: 100, transition: 'background 0.2s' }}
+                onMouseEnter={e => (e.target as HTMLDivElement).style.background = '#0c66ff'}
                 onMouseLeave={e => (e.target as HTMLDivElement).style.background = resizingPane === 'list' ? '#0c66ff' : 'transparent'}
             />
 
             {/* Detail */}
             <main className="issue-detail-pane" ref={detailPaneRef}>
                 {selectedIssue ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', alignItems: 'stretch' }}>
                         <div style={{ padding: '40px 30px 20px' }}>
                             {/* ID and actions row */}
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
@@ -2032,7 +2034,15 @@ const App: React.FC = () => {
                             <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 15 }}>创建人：{selectedIssue.author.name} • 时间：{format(new Date(selectedIssue.created_on), 'yyyy-MM-dd HH:mm')}</div>
                         </div>
 
-                        <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 100 }}>
+                        <div
+                            style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', paddingBottom: 20 }}
+                            onWheel={(e) => {
+                                if (e.shiftKey && e.deltaY !== 0) {
+                                    e.currentTarget.scrollLeft += e.deltaY;
+                                    e.preventDefault();
+                                }
+                            }}
+                        >
                             <div style={{ padding: '0 30px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
                                     <h3 style={{ fontSize: 13, fontWeight: 500, color: '#666', textTransform: 'uppercase' }}>Description</h3>
@@ -2111,28 +2121,37 @@ const App: React.FC = () => {
                             {/* Attachments Section */}
                             {(() => {
                                 const currentDescription = editingDescription ? editDescriptionValue : (selectedIssue.description || '');
+                                const journals = selectedIssue.journals || [];
+                                const allNotes = journals.map((j: IssueJournal) => j.notes || '').join('\n');
+                                const allText = currentDescription + '\n' + allNotes;
 
-                                const isImageReferenced = (filename: string, text: string) => {
+                                const isImageReferenced = (filename: string, contentUrl: string | undefined, text: string) => {
                                     if (!text) return false;
+
+                                    // Check if full content_url appears in text (most reliable)
+                                    if (contentUrl && text.includes(contentUrl)) return true;
+
                                     const encoded = encodeURIComponent(filename);
+                                    const escapedFilename = filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                                    const escapedEncoded = encoded.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-                                    // Check for Textile image syntax: !filename! or !filename(alt)!
-                                    const textilePattern = new RegExp(`!${filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\([^)]*\\))?!`, 'g');
-                                    const textileEncodedPattern = new RegExp(`!${encoded.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\([^)]*\\))?!`, 'g');
+                                    // Check for Textile image syntax: !filename!
+                                    const textilePattern = new RegExp(`!${escapedFilename}!`, 'i');
+                                    const textileEncodedPattern = new RegExp(`!${escapedEncoded}!`, 'i');
 
-                                    // Check for Markdown image syntax: ![alt](attachment:filename) or ![alt](filename)
-                                    const markdownPattern = new RegExp(`!\\[[^\\]]*\\]\\((?:attachment:)?${filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`, 'g');
-                                    const markdownEncodedPattern = new RegExp(`!\\[[^\\]]*\\]\\((?:attachment:)?${encoded.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`, 'g');
+                                    // Check for Markdown image syntax: ![](filename) or ![](attachment:filename)
+                                    const hasMarkdown = text.includes(`(${filename})`) ||
+                                        text.includes(`(${encoded})`) ||
+                                        text.includes(`(attachment:${filename})`) ||
+                                        text.includes(`(attachment:${encoded})`);
 
-                                    return textilePattern.test(text) ||
-                                        textileEncodedPattern.test(text) ||
-                                        markdownPattern.test(text) ||
-                                        markdownEncodedPattern.test(text);
+                                    if (hasMarkdown) return true;
+                                    return textilePattern.test(text) || textileEncodedPattern.test(text);
                                 };
 
                                 const filteredAttachments = selectedIssue.attachments?.filter(a => {
                                     if (a.content_type?.startsWith('image/')) {
-                                        if (isImageReferenced(a.filename, currentDescription)) return false;
+                                        if (isImageReferenced(a.filename, a.content_url, allText)) return false;
                                     }
                                     return true;
                                 }) || [];
@@ -2141,12 +2160,12 @@ const App: React.FC = () => {
                                     if (u.content_type?.startsWith('image/')) {
                                         // Check if tempUrl is used in markdown image syntax: ![](data:...) or textile !data:...!
                                         const isTempInImage = u.tempUrl && (
-                                            currentDescription.includes(`](${u.tempUrl})`) ||
-                                            currentDescription.includes(`!${u.tempUrl}!`)
+                                            allText.includes(`](${u.tempUrl})`) ||
+                                            allText.includes(`!${u.tempUrl}!`)
                                         );
 
                                         if (isTempInImage) return false;
-                                        if (isImageReferenced(u.filename, currentDescription)) return false;
+                                        if (isImageReferenced(u.filename, undefined, allText)) return false;
                                     }
                                     return true;
                                 });

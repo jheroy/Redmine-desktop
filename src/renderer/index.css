@@ -6,7 +6,7 @@
   --list-bg: #111111;
   --detail-bg: #0a0a0a;
   --card-bg: #1a1a1a;
-  --border-color: #222222;
+  --border-color: rgba(255, 255, 255, 0.05);
   --text-primary: #ffffff;
   --text-secondary: #888888;
   --accent-color: #0c66ff;
@@ -27,7 +27,7 @@
   --detail-bg: #fafafa;
   /* Soft White */
   --card-bg: rgba(255, 255, 255, 0.85);
-  --border-color: rgba(0, 0, 0, 0.08);
+  --border-color: rgba(0, 0, 0, 0.06);
   --text-primary: #1c1c1e;
   --text-secondary: #3c3c43;
   /* Darker for better readability */
@@ -139,7 +139,7 @@ body {
 .issue-detail-pane {
   flex: 1;
   background: var(--detail-bg);
-  overflow-y: auto;
+  overflow: hidden;
   overflow-x: hidden;
   color: var(--text-primary);
   /* Performance: isolate repaints within this container */
@@ -174,15 +174,6 @@ body {
   background: rgba(255, 255, 255, 0.1) !important;
 }
 
-.transparency-enabled .add-task-bar {
-  background: rgba(15, 15, 15, 0.92) !important;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.light-theme.transparency-enabled .add-task-bar {
-  background: rgba(255, 255, 255, 0.92) !important;
-  border-top: 1px solid rgba(0, 0, 0, 0.08);
-}
 
 /* Sidebar Styling */
 .sidebar-content {
@@ -377,21 +368,49 @@ body {
   justify-content: space-between;
 }
 
-.add-task-bar {
+.pane-footer {
   padding: 15px;
-  background: var(--editor-bg);
-  border-top: 1px solid var(--editor-border);
+  height: 66px;
+  border-top: 1px solid var(--border-color);
   display: flex;
   align-items: center;
+  flex-shrink: 0;
   gap: 10px;
+  width: 100%;
+  position: relative;
+  z-index: 10;
+}
+
+.add-task-bar {
+  background: var(--list-bg);
   z-index: 100;
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+}
+
+.note-editor-bar {
+  background: var(--detail-bg);
+  z-index: 10;
+}
+
+.transparency-enabled .pane-footer {
+  background: rgba(10, 10, 10, 0.3) !important;
+}
+
+.light-theme.transparency-enabled .pane-footer {
+  background: rgba(255, 255, 255, 0.1) !important;
 }
 
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
+  height: 0;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-resizer {
+  display: none;
 }
 
 ::-webkit-scrollbar-thumb {

@@ -12,6 +12,8 @@ interface AuthenticatedImageProps {
 
 // Global image blob cache to prevent re-fetching
 const imageBlobCache = new Map<string, string>();
+// Track in-flight requests to prevent duplicate concurrent requests
+const pendingRequests = new Map<string, Promise<string | null>>();
 
 const AuthenticatedImageComponent: React.FC<AuthenticatedImageProps> = ({ src, alt, style, className, fetchBlob, onClick, onMouseDown }) => {
     const [objectUrl, setObjectUrl] = useState<string | null>(() => {
@@ -32,11 +34,30 @@ const AuthenticatedImageComponent: React.FC<AuthenticatedImageProps> = ({ src, a
 
         async function loadImage() {
             try {
-                const blob = await fetchBlob(src);
-                if (blob && isMounted) {
-                    const url = URL.createObjectURL(blob);
-                    // Cache the blob URL
-                    imageBlobCache.set(src, url);
+                // Check if there's already a pending request for this src
+                let pendingPromise = pendingRequests.get(src);
+
+                if (!pendingPromise) {
+                    // Create a new request
+                    pendingPromise = (async () => {
+                        try {
+                            const blob = await fetchBlob(src);
+                            if (blob) {
+                                const url = URL.createObjectURL(blob);
+                                imageBlobCache.set(src, url);
+                                return url;
+                            }
+                            return null;
+                        } finally {
+                            // Clean up pending request after completion
+                            pendingRequests.delete(src);
+                        }
+                    })();
+                    pendingRequests.set(src, pendingPromise);
+                }
+
+                const url = await pendingPromise;
+                if (url && isMounted) {
                     setObjectUrl(url);
                 }
             } catch (e) {
@@ -51,9 +72,8 @@ const AuthenticatedImageComponent: React.FC<AuthenticatedImageProps> = ({ src, a
 
         return () => {
             isMounted = false;
-            // Don't revoke cached URLs - they're shared
         };
-    }, [src]); // Only depend on src, not fetchBlob
+    }, [src]);
 
     if (error) return <div style={{ ...style, background: '#333', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>Failed to load image</div>;
     if (!objectUrl) return <div style={{ ...style, background: '#222' }} />;

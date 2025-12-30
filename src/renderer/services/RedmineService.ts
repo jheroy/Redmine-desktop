@@ -102,8 +102,12 @@ export class RedmineService {
         }
 
         // Add API key as query parameter for better compatibility with redirects
-        const connector = url.includes('?') ? '&' : '?';
-        const finalUrl = `${url}${connector}key=${this.axios.defaults.headers['X-Redmine-API-Key']}`;
+        // Only add if not already present
+        let finalUrl = url;
+        if (!url.includes('key=')) {
+            const connector = url.includes('?') ? '&' : '?';
+            finalUrl = `${url}${connector}key=${this.axios.defaults.headers['X-Redmine-API-Key']}`;
+        }
 
         console.log(`Fetching image: ${finalUrl} (Base: ${configBaseURL})`);
 
