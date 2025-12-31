@@ -943,6 +943,52 @@ export function useAppViewModel() {
         return Array.from(memberMap.values()).sort((a, b) => a.name.localeCompare(b.name));
     }, [projectMembersMap, allIssues]);
 
+    // Open issue by ID (for deep linking)
+    const openIssueById = useCallback(async (issueId: number): Promise<{ projectId: number; versionId: number | null; issueId: number } | null> => {
+        if (!service) return null;
+
+        // First, check if the issue already exists locally
+        let issue = allIssues.find(i => i.id === issueId);
+
+        if (!issue) {
+            // Issue not found locally, fetch it from server
+            try {
+                console.log(`[openIssueById] Issue ${issueId} not found locally, fetching from server...`);
+                issue = await service.fetchIssueDetail(issueId);
+
+                // Add to allIssues
+                setAllIssues(prev => {
+                    // Check if it was added while we were fetching
+                    if (prev.some(i => i.id === issueId)) {
+                        return prev.map(i => i.id === issueId ? issue! : i);
+                    }
+                    return [...prev, issue!];
+                });
+            } catch (e: any) {
+                console.error(`[openIssueById] Failed to fetch issue ${issueId}:`, e);
+                setErrorMessage(`无法获取 Issue #${issueId}: ${e.message}`);
+                return null;
+            }
+        }
+
+        if (!issue) return null;
+
+        // Ensure the issue has project information
+        if (!issue.project) {
+            console.error(`[openIssueById] Issue ${issueId} has no project information`);
+            setErrorMessage(`Issue #${issueId} 缺少项目信息`);
+            return null;
+        }
+
+        const projectId = issue.project.id;
+        const versionId = issue.fixed_version?.id || null;
+
+        console.log(`[openIssueById] Opening issue ${issueId} in project ${projectId}, version ${versionId}`);
+
+        // Return the project/version/issue info for the App component to handle selection
+        return { projectId, versionId, issueId };
+    }, [service, allIssues]);
+
     return {
         isConfigured,
         saveSettings,
@@ -1008,6 +1054,7 @@ export function useAppViewModel() {
         hideVerifiedInFollowed,
         setHideVerifiedInFollowed,
         hideVerifiedInAssigned,
-        setHideVerifiedInAssigned
+        setHideVerifiedInAssigned,
+        openIssueById
     };
 }

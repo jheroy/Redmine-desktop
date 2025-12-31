@@ -218,6 +218,68 @@ app.on('activate', () => {
     }
 })
 
+// Register custom protocol for deep linking (redmine://)
+if (process.defaultApp) {
+    if (process.argv.length >= 2) {
+        app.setAsDefaultProtocolClient('redmine', process.execPath, [path.resolve(process.argv[1])])
+    }
+} else {
+    app.setAsDefaultProtocolClient('redmine')
+}
+
+// Handle deep link on macOS
+app.on('open-url', (event, url) => {
+    event.preventDefault()
+    console.log('Received deep link:', url)
+    handleDeepLink(url)
+})
+
+// Handle deep link on Windows
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
+    app.quit()
+} else {
+    app.on('second-instance', (event, commandLine, workingDirectory) => {
+        // Someone tried to run a second instance, we should focus our window.
+        if (win) {
+            if (win.isMinimized()) win.restore()
+            win.focus()
+        }
+
+        // Check for deep link in command line
+        const url = commandLine.find(arg => arg.startsWith('redmine://'))
+        if (url) {
+            console.log('Received deep link from second instance:', url)
+            handleDeepLink(url)
+        }
+    })
+}
+
+// Function to handle deep link
+function handleDeepLink(url: string) {
+    console.log('Processing deep link:', url)
+
+    // Extract issue ID from URL (e.g., redmine://20435 -> 20435)
+    const match = url.match(/^redmine:\/\/(\d+)$/i)
+    if (match) {
+        const issueId = parseInt(match[1], 10)
+        console.log('Extracted issue ID:', issueId)
+
+        // Send to renderer process
+        if (win && !win.isDestroyed()) {
+            win.webContents.send('open-issue-by-id', issueId)
+
+            // Make sure window is visible
+            if (!win.isVisible()) {
+                win.show()
+            }
+            win.focus()
+        }
+    } else {
+        console.error('Invalid redmine:// URL format:', url)
+    }
+}
+
 app.whenReady().then(() => {
     createWindow()
     if (process.platform === 'darwin' || process.platform === 'win32') {
@@ -227,6 +289,16 @@ app.whenReady().then(() => {
     // Initialize auto-updater (自动检测由 updater.ts 处理)
     if (win) {
         initUpdater(win)
+    }
+
+    // Handle deep link from command line on Windows
+    if (process.platform === 'win32') {
+        const url = process.argv.find(arg => arg.startsWith('redmine://'))
+        if (url) {
+            console.log('Received deep link from argv:', url)
+            // Delay to ensure window is ready
+            setTimeout(() => handleDeepLink(url), 1000)
+        }
     }
 })
 

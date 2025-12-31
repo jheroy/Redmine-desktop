@@ -694,6 +694,40 @@ const App: React.FC = () => {
         };
     }, []);
 
+    // Listen for 'open-issue-by-id' from main process (deep linking)
+    useEffect(() => {
+        const handler = async (_: any, issueId: number) => {
+            console.log('[App] Received open-issue-by-id:', issueId);
+
+            try {
+                const result = await vm.openIssueById(issueId);
+
+                if (result) {
+                    const { projectId, versionId, issueId: foundIssueId } = result;
+
+                    // Switch to the project and version
+                    if (versionId) {
+                        vm.selectVersion(projectId, versionId);
+                    } else {
+                        vm.selectProject(projectId);
+                    }
+
+                    // Select the issue
+                    setSelectedIssueId(foundIssueId);
+
+                    console.log(`[App] Successfully opened issue #${foundIssueId} in project ${projectId}, version ${versionId}`);
+                }
+            } catch (error) {
+                console.error('[App] Failed to open issue by ID:', error);
+            }
+        };
+
+        (window as any).ipcRenderer?.on('open-issue-by-id', handler);
+        return () => {
+            (window as any).ipcRenderer?.off('open-issue-by-id', handler);
+        };
+    }, [vm.openIssueById, vm.selectProject, vm.selectVersion]);
+
     // Manage issue selection automatically when context (project/version) changes
     useEffect(() => {
         const issues = vm.groupedIssues;
