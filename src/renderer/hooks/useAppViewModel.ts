@@ -489,7 +489,7 @@ export function useAppViewModel() {
     }, [service, isConfigured, loadInitialData]);
 
     useEffect(() => {
-        if (isConfigured && selectedProjectId && selectedProjectId !== -1) {
+        if (isConfigured && selectedProjectId && selectedProjectId > 0) {
             fetchProjectDetails(selectedProjectId);
         }
     }, [selectedProjectId, fetchProjectDetails, isConfigured]);
