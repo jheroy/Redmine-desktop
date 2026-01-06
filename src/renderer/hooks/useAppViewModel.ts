@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, startTransition } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, startTransition } from 'react';
 import { RedmineService } from '../services/RedmineService';
 import { Project, Issue, Version, User, IssueStatus, IssuePriority } from '../models/redmine';
 import { getAssignedWatchers, getAssignedWatchersField, createAssignedWatchersUpdate } from '../utils/assignedWatchers';
@@ -13,6 +13,8 @@ export function useAppViewModel() {
 
     // Explicitly track if the user has successfully configured and saved
     const [isConfigured, setIsConfigured] = useState(!!(redmineURL && redmineAPIKey));
+
+    const isRefreshingRef = useRef(false);
 
     const [projects, setProjects] = useState<Project[]>([]);
     // Load cached issues from localStorage on startup
@@ -175,6 +177,12 @@ export function useAppViewModel() {
 
     const refreshIssues = useCallback(async () => {
         if (!service) return;
+        if (isRefreshingRef.current) {
+            console.log('Refresh already in progress, skipping...');
+            return;
+        }
+
+        isRefreshingRef.current = true;
         setIsBackgroundRefreshing(true);
         try {
             // Fetch issues for all active versions only
@@ -222,10 +230,21 @@ export function useAppViewModel() {
                     i.fixed_version?.id && refreshedVersionIds.has(i.fixed_version.id)
                 );
 
+                let hasChanges = false;
+
                 const mergedActiveIssues = existingActiveIssues
-                    .filter(oldIssue => fetchedIssueMap.has(oldIssue.id))
+                    .filter(oldIssue => {
+                        const exists = fetchedIssueMap.has(oldIssue.id);
+                        if (!exists) hasChanges = true; // Removed issue
+                        return exists;
+                    })
                     .map(oldIssue => {
                         const newIssue = fetchedIssueMap.get(oldIssue.id)!;
+                        // 简单比较 updated_on 检查是否有变更
+                        if (newIssue.updated_on !== oldIssue.updated_on) {
+                            hasChanges = true;
+                        }
+
                         // 智能合并：保留附件、日志、关注者等可能只有详情接口才有的字段
                         return {
                             ...newIssue,
@@ -239,6 +258,16 @@ export function useAppViewModel() {
                 // 3. 找出全新的 issue（在 fetchedIssueMap 中但不在 existingActiveIssues 中）
                 const activeIssueIds = new Set(existingActiveIssues.map(i => i.id));
                 const brandNewIssues = allFetchedIssues.filter(i => !activeIssueIds.has(i.id));
+
+                if (brandNewIssues.length > 0) {
+                    hasChanges = true;
+                }
+
+                if (!hasChanges) {
+                    // 如果没有任何变化（没有新增，没有删除，更新时间都一致），则不产生新对象引用，这能避免大量无谓的重渲染
+                    console.log('[refreshIssues] No changes detected in active versions.');
+                    return prev;
+                }
 
                 const newIssuesList = [...preservedIssues, ...mergedActiveIssues, ...brandNewIssues];
 
@@ -318,6 +347,7 @@ export function useAppViewModel() {
         } catch (e: any) {
             setErrorMessage(`Refresh failed: ${e.message}`);
         } finally {
+            isRefreshingRef.current = false;
             setIsBackgroundRefreshing(false);
         }
     }, [service, currentUser, activeVersionIds]); // Badge updates handled by reactive useEffect
@@ -832,77 +862,157 @@ export function useAppViewModel() {
         setSelectedVersionId(versionId);
     };
 
-    const filteredIssues = useMemo(() => {
-        return allIssues.filter(i => {
-            const isMyFollowed = selectedProjectId === -2;
-            const isMyAssigned = selectedProjectId === -3;
-            const isSpecialView = isMyFollowed || isMyAssigned;
-
-            const matchProject = selectedProjectId === -1 || isSpecialView || i.project?.id === selectedProjectId;
-            const matchFollowed = !isMyFollowed || followedIssueIds.has(i.id);
-            const matchAssigned = !isMyAssigned || (currentUser && i.assigned_to?.id === currentUser.id);
-
-            const matchVersion = !selectedVersionId || i.fixed_version?.id === selectedVersionId;
-            // Skip assignee and assigned watcher filters in special views (My Followed, My Assigned)
-            const matchAssignee = isSpecialView || !selectedAssigneeId || i.assigned_to?.id === selectedAssigneeId;
-            // 协助者过滤:如果选了协助者,则只显示包含该协助者的问题
-            const assignedWatchers = getAssignedWatchers(i);
-            const matchAssignedWatchers = isSpecialView || selectedAssignedWatcherIds.size === 0 ||
-                assignedWatchers.some(aw => selectedAssignedWatcherIds.has(aw.id));
-            const matchStatus = !selectedStatusId || i.status.id === selectedStatusId;
-            const matchQuery = !searchQuery ||
-                i.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                i.id.toString().includes(searchQuery);
-            // Hide verified issues in special views if toggle is on
-            const shouldHideVerified = (isMyFollowed && hideVerifiedInFollowed) || (isMyAssigned && hideVerifiedInAssigned);
-            const matchHideVerified = !shouldHideVerified || !i.status.name.includes('验证完成');
-            return matchProject && matchFollowed && matchAssigned && matchVersion && matchAssignee && matchAssignedWatchers && matchStatus && matchQuery && matchHideVerified;
-        });
-    }, [allIssues, selectedProjectId, selectedVersionId, selectedAssigneeId, selectedAssignedWatcherIds, selectedStatusId, searchQuery, followedIssueIds, currentUser, hideVerifiedInFollowed, hideVerifiedInAssigned]);
-
     const statusSortMap = useMemo(() => {
         return issueStatuses.reduce((acc, s, idx) => ({ ...acc, [s.name]: idx }), {} as Record<string, number>);
     }, [issueStatuses]);
 
+    // Unified calculation for all versions to support instant switching
+    // Returns a map where key is versionId (or -1/-2/-3 for special views) and value is the grouped data
+    const versionViewData = useMemo(() => {
+        // Base filter for project/assignee/search/status ONLY (ignoring version)
+        // We do this first to avoid repeating it for every version
+        // Base filter for project/assignee/search/status
+        // We REMOVED the strict project filter here to allow "background" tabs from other projects to retain their data.
+        // Now we filter everything and let the bucketing logic sort it out.
+        const baseFiltered = allIssues.filter(i => {
+            // Common filters
+            const matchQuery = !searchQuery ||
+                i.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                i.id.toString().includes(searchQuery);
+            if (!matchQuery) return false;
+
+            // Status filter (global setting?)
+            if (selectedStatusId && i.status.id !== selectedStatusId) return false;
+
+            return true;
+        });
+
+        // Now bucket them by versionId (and special buckets)
+        const buckets: Record<string, Issue[]> = {};
+        const addToBucket = (key: string, issue: Issue) => {
+            if (!buckets[key]) buckets[key] = [];
+            buckets[key].push(issue);
+        };
+
+        baseFiltered.forEach(i => {
+            // 1. Regular Version Buckets
+            if (i.fixed_version?.id) {
+                // Apply Assignee/Watcher filters which might be specific to the "standard" view
+                // For standard views, we respect selectedAssigneeId and selectedAssignedWatcherIds
+                const matchAssignee = !selectedAssigneeId || i.assigned_to?.id === selectedAssigneeId;
+                const assignedWatchers = getAssignedWatchers(i);
+                const matchAssignedWatchers = selectedAssignedWatcherIds.size === 0 ||
+                    assignedWatchers.some(aw => selectedAssignedWatcherIds.has(aw.id));
+
+                if (matchAssignee && matchAssignedWatchers) {
+                    addToBucket(i.fixed_version.id.toString(), i);
+                }
+            } else {
+                // Issues without version
+                // We might want to see them in "Project" view, handled below
+            }
+
+            // 4. Project/All Bucket (p-{projectId})
+            // This bucket contains ALL issues for the current view (filtered by assignee/watcher)
+            // It allows displaying "All Issues" for the project or globally
+            {
+                const matchAssignee = !selectedAssigneeId || i.assigned_to?.id === selectedAssigneeId;
+                const assignedWatchers = getAssignedWatchers(i);
+                const matchAssignedWatchers = selectedAssignedWatcherIds.size === 0 ||
+                    assignedWatchers.some(aw => selectedAssignedWatcherIds.has(aw.id));
+
+                if (matchAssignee && matchAssignedWatchers && i.project?.id) {
+                    addToBucket(`p-${i.project.id}`, i);
+                }
+            }
+
+            // 4b. All Projects Bucket (p--1) - For "All Projects" view
+            {
+                const matchAssignee = !selectedAssigneeId || i.assigned_to?.id === selectedAssigneeId;
+                const assignedWatchers = getAssignedWatchers(i);
+                const matchAssignedWatchers = selectedAssignedWatcherIds.size === 0 ||
+                    assignedWatchers.some(aw => selectedAssignedWatcherIds.has(aw.id));
+
+                if (matchAssignee && matchAssignedWatchers) {
+                    addToBucket(`p--1`, i);
+                }
+            }
+
+            // 2. My Followed Bucket (-2)
+            // Special views ignore Assignee/Watcher filters (as per original logic)
+            // But they respect the "Hide Verified" toggle
+            if (followedIssueIds.has(i.id)) {
+                const shouldHideVerified = hideVerifiedInFollowed;
+                if (!shouldHideVerified || !i.status.name.includes('验证完成')) {
+                    addToBucket('-2', i);
+                }
+            }
+
+            // 3. My Assigned Bucket (-3)
+            if (currentUser && i.assigned_to?.id === currentUser.id) {
+                const shouldHideVerified = hideVerifiedInAssigned;
+                if (!shouldHideVerified || !i.status.name.includes('验证完成')) {
+                    addToBucket('-3', i);
+                }
+            }
+        });
+
+        // Now generate grouped data for each bucket
+        const result: Record<string, { groups: Record<string, Issue[]>; sortedKeys: string[] }> = {};
+
+        Object.keys(buckets).forEach(key => {
+            const issues = buckets[key];
+            const groups: Record<string, Issue[]> = {};
+            const keys: string[] = [];
+
+            if (groupByMode === 'assignee') {
+                issues.forEach(i => {
+                    const assigneeName = i.assigned_to?.name || '未指派';
+                    if (!groups[assigneeName]) {
+                        groups[assigneeName] = [];
+                        keys.push(assigneeName);
+                    }
+                    groups[assigneeName].push(i);
+                });
+                keys.sort((a, b) => {
+                    if (a === '未指派') return 1;
+                    if (b === '未指派') return -1;
+                    return a.localeCompare(b);
+                });
+            } else {
+                issues.forEach(i => {
+                    const statusName = i.status.name;
+                    if (!groups[statusName]) {
+                        groups[statusName] = [];
+                        keys.push(statusName);
+                    }
+                    groups[statusName].push(i);
+                });
+                keys.sort((a, b) => (statusSortMap[a] ?? 99) - (statusSortMap[b] ?? 99));
+            }
+            result[key] = { groups, sortedKeys: keys };
+        });
+
+        return result;
+
+    }, [allIssues, selectedStatusId, searchQuery, selectedAssigneeId, selectedAssignedWatcherIds, followedIssueIds, currentUser, hideVerifiedInFollowed, hideVerifiedInAssigned, groupByMode, statusSortMap]);
+
+    // Backward compatibility for App.tsx (returns data for CURRENT selection)
+    // accessible as vm.groupedIssues
+    const currentGroupedIssues = useMemo(() => {
+        let key = '';
+        if (selectedProjectId === -2) key = '-2';
+        else if (selectedProjectId === -3) key = '-3';
+        else if (selectedVersionId) key = selectedVersionId.toString();
+        else if (selectedProjectId !== null) key = `p-${selectedProjectId}`;
+
+        return versionViewData[key] || { groups: {}, sortedKeys: [] };
+
+    }, [versionViewData, selectedProjectId, selectedVersionId]);
+
     const followedIssuesCount = useMemo(() => {
         return followedIssueIds.size;
     }, [followedIssueIds]);
-
-    const groupedIssues = useMemo(() => {
-        const groups: Record<string, Issue[]> = {};
-        const keys: string[] = [];
-
-        if (groupByMode === 'assignee') {
-            // Group by assignee
-            filteredIssues.forEach(i => {
-                const assigneeName = i.assigned_to?.name || '未指派';
-                if (!groups[assigneeName]) {
-                    groups[assigneeName] = [];
-                    keys.push(assigneeName);
-                }
-                groups[assigneeName].push(i);
-            });
-            // Sort: '未指派' at end, others alphabetically
-            keys.sort((a, b) => {
-                if (a === '未指派') return 1;
-                if (b === '未指派') return -1;
-                return a.localeCompare(b);
-            });
-        } else {
-            // Group by status (default)
-            filteredIssues.forEach(i => {
-                const statusName = i.status.name;
-                if (!groups[statusName]) {
-                    groups[statusName] = [];
-                    keys.push(statusName);
-                }
-                groups[statusName].push(i);
-            });
-            keys.sort((a, b) => (statusSortMap[a] ?? 99) - (statusSortMap[b] ?? 99));
-        }
-
-        return { groups, sortedKeys: keys };
-    }, [filteredIssues, statusSortMap, groupByMode]);
 
     const globalMembers = useMemo(() => {
         const memberMap = new Map<number, { id: number; name: string; groups: string[] }>();
@@ -1015,7 +1125,8 @@ export function useAppViewModel() {
         isLoading,
         isBackgroundRefreshing,
         errorMessage,
-        groupedIssues,
+        groupedIssues: currentGroupedIssues, // Export the current one for compatibility
+        versionViewData, // Export the full map for advanced UI usage
         updateIssue,
         addNote,
         addWatcher,         // 关注者

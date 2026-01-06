@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback, useRef, useDeferredValue } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef, useDeferredValue, useLayoutEffect } from 'react';
 import { useAppViewModel } from './hooks/useAppViewModel';
 import { Issue, IssueJournal } from './models/redmine';
 import { format } from 'date-fns';
@@ -41,7 +41,7 @@ const MemoIssueItem = React.memo(({
     onToggleFollow: (id: number) => void
 }) => {
     return (
-        <div className={`issue-item ${isSelected ? 'selected' : ''}`} onClick={() => onSelect(issue.id)} style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 10, position: 'relative' }}>
+        <div className={`issue-item ${isSelected ? 'selected' : ''}`} data-issue-id={issue.id} onClick={() => onSelect(issue.id)} style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 10, position: 'relative' }}>
             <div className="issue-icon-circle" style={{
                 borderColor: issue.status.name.includes('开发完成') ? '#30d158' : issue.status.name.includes('验证完成') ? 'var(--text-secondary)' : '#ff453a',
                 width: 18, height: 18, fontSize: 9, flexShrink: 0,
@@ -147,6 +147,11 @@ const MemoIssueItem = React.memo(({
     );
 }, (prevProps, nextProps) => {
     // Custom comparison: only re-render if these specific props changed
+    // We add a ref check or callback to notify parent about position? 
+    // Actually, for indicator, we need the DOM element. 
+    // But since we can't easily pass ref through memo without forwardRef, 
+    // and we have many items, maybe we just use a data attribute and let parent find it?
+    // Using `data-issue-id` is good.
     return (
         prevProps.isSelected === nextProps.isSelected &&
         prevProps.issue.id === nextProps.issue.id &&
@@ -225,9 +230,304 @@ const NoteEditor: React.FC<{ issueId: number, onAddNote: (id: number, text: stri
     );
 };
 
+
+
+const TabbedIssueList = React.memo(({
+    currentKey,
+    versionViewData,
+    vm,
+    deferredGroupedIssues,
+    selectedIssueState, // Pass full state object
+    handleSelectIssue,
+    handleUpdateStatus,
+    handleUpdatePriority,
+    handleUpdateVersion,
+    handleUpdateAssignee,
+    stableStatusList,
+    stablePriorityList,
+    stableVersionListCache,
+    stableGroupedMemberCache,
+}: any) => {
+    // Keep track of which tabs we have rendered at least once
+    const [visitedTabs, setVisitedTabs] = useState<Set<string>>(new Set());
+
+    useEffect(() => {
+        // Mark current as visited
+        if (currentKey && !visitedTabs.has(currentKey)) {
+            setVisitedTabs(prev => {
+                const newSet = new Set(prev);
+                newSet.add(currentKey);
+                return newSet;
+            });
+        }
+    }, [currentKey, visitedTabs]);
+
+    const tabsToRender = Array.from(visitedTabs);
+
+    return (
+        <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+            {tabsToRender.map(key => {
+                const isActive = key === currentKey;
+                const data = vm.versionViewData[key];
+                if (!data) return null;
+
+                // Use visibility: hidden + absolute positioning to preserve scroll position and layout state
+                // This is much more reliable than display: none + manual scroll restoration
+                return (
+                    <div
+                        key={key}
+                        data-tab-key={key}
+                        style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            width: '100%',
+                            height: '100%',
+                            overflowY: 'auto',
+                            visibility: isActive ? 'visible' : 'hidden',
+                            zIndex: isActive ? 1 : 0,
+                            backgroundColor: 'transparent'
+                        }}
+                    >
+                        {/* Wrapper for padding - ensure it doesn't break absolute layout */}
+                        <div style={{ paddingBottom: 20 }}>
+                            <IssueListContent
+                                isActive={isActive}
+                                tabKey={key} // Pass tabKey so content knows who it is
+                                globalSelectedIssueState={selectedIssueState}
+                                data={data}
+                                vm={vm}
+                                onSelectIssue={handleSelectIssue}
+                                handleUpdateStatus={handleUpdateStatus}
+                                handleUpdatePriority={handleUpdatePriority}
+                                handleUpdateVersion={handleUpdateVersion}
+                                handleUpdateAssignee={handleUpdateAssignee}
+                                stableStatusList={stableStatusList}
+                                stablePriorityList={stablePriorityList}
+                                stableVersionListCache={stableVersionListCache}
+                                stableGroupedMemberCache={stableGroupedMemberCache}
+                            />
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+});
+
+// Extracted Inner List Content
+const IssueListContent = React.memo(({
+    data,
+    vm,
+    isActive,
+    tabKey,
+    globalSelectedIssueState,
+    onSelectIssue,
+    stableStatusList,
+    stablePriorityList,
+    stableVersionListCache,
+    stableGroupedMemberCache,
+    handleUpdateStatus,
+    handleUpdatePriority,
+    handleUpdateVersion,
+    handleUpdateAssignee,
+}: any) => {
+    // We need local collapsed state for THIS list instance?
+    // Parent App has `collapsedGroups` which is global (keyed by group name).
+    // This is fine as long as group names are unique enough or we want shared collapsed state.
+    // Ideally, local state per tab is better for "memory", but let's stick to simple "toggleGroup" from parent if passed?
+    // Wait, toggleGroup is in App. We need to pass it or use local state here.
+    // Using local state here ensures each tab has its own expand/collapse memory which is even better!
+    const [localCollapsed, setLocalCollapsed] = useState<Record<string, boolean>>({});
+
+    const toggleLocalGroup = (groupKey: string) => {
+        setLocalCollapsed(prev => ({ ...prev, [groupKey]: !prev[groupKey] }));
+    };
+
+    const listRef = useRef<HTMLDivElement>(null);
+
+    // Local selection state for this tab
+    const [localSelectedId, setLocalSelectedId] = useState<number | null>(null);
+
+    // Sync with App when this tab becomes active
+    useEffect(() => {
+        if (isActive) {
+            // Check if global selection is intended for THIS tab (Deep Link or same-tab click)
+            // Or if global selection is empty/null (we can restore ours)
+            // sourceKey comparison is crucial to prevent "inheriting" selection from another tab
+            const globalId = globalSelectedIssueState?.id;
+            const sourceKey = globalSelectedIssueState?.sourceKey;
+
+            const isForMe = sourceKey === tabKey;
+
+            if (isForMe && globalId) {
+                // It's explicitly for us, adopt it
+                if (globalId !== localSelectedId) {
+                    setLocalSelectedId(globalId);
+                }
+            } else {
+                // Not for us (or empty), check if we should restore OUR selection to App
+                // Only if current global is NOT for us (i.e. we are switching TO this tab)
+                // If global is empty, we restore. if global is for another key, we still restore (overwriting it)
+                if (localSelectedId !== globalId) {
+                    onSelectIssue(localSelectedId, tabKey);
+                }
+            }
+        }
+    }, [isActive, globalSelectedIssueState, data, tabKey]);
+
+    // Handle local click - notify parent with our key
+    const onLocalSelect = useCallback((id: number) => {
+        setLocalSelectedId(id);
+        onSelectIssue(id, data.tabKey); // Pass tabKey (we need to inject this prop)
+    }, [onSelectIssue, data]);
+
+
+    const [indicatorStyle, setIndicatorStyle] = useState<React.CSSProperties>({ opacity: 0 });
+    const prevActiveRef = useRef(isActive);
+
+    useEffect(() => {
+        if (!isActive) {
+            prevActiveRef.current = false;
+            return;
+        }
+
+        const justWokeUp = !prevActiveRef.current;
+        if (justWokeUp) {
+            prevActiveRef.current = true;
+        }
+
+        if (localSelectedId && listRef.current) {
+            // Find the selected item element
+            // For tab activation, delay the query to avoid blocking the visibility switch
+            const delay = justWokeUp ? 2 : 0; // 2 RAF for tab switch, immediate for selection change
+
+            let rafId: number;
+            const scheduleUpdate = (remaining: number) => {
+                if (remaining > 0) {
+                    rafId = requestAnimationFrame(() => scheduleUpdate(remaining - 1));
+                } else {
+                    const el = listRef.current?.querySelector(`[data-issue-id="${localSelectedId}"]`) as HTMLElement;
+                    if (el) {
+                        setIndicatorStyle({
+                            top: el.offsetTop,
+                            height: el.offsetHeight,
+                            opacity: 1
+                        });
+                    } else {
+                        setIndicatorStyle({ opacity: 0 });
+                    }
+                }
+            };
+
+            scheduleUpdate(delay);
+            return () => {
+                if (rafId) cancelAnimationFrame(rafId);
+            };
+        } else {
+            setIndicatorStyle({ opacity: 0 });
+        }
+    }, [localSelectedId, data, localCollapsed, isActive]);
+
+
+    const sortedKeys = data.sortedKeys || [];
+    const groups = data.groups || {};
+
+    if (sortedKeys.length === 0 && !vm.isLoading) {
+        return (
+            <div style={{ textAlign: 'center', marginTop: 50, color: 'var(--text-secondary)', fontSize: 13 }}>
+                该项当前下未发现任务。<br />
+                <button onClick={() => vm.refreshData()} style={{ marginTop: 10, background: 'none', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '5px 15px', borderRadius: 4, cursor: 'pointer' }}>强制刷新</button>
+            </div>
+        );
+    }
+
+    // Force hide indicator if not active to prevent any "ghost" residue
+    // This is a safety guard on top of parent visibility:hidden
+    const finalIndicatorStyle = isActive ? indicatorStyle : { opacity: 0, transition: 'none' };
+
+    return (
+        <div style={{ position: 'relative' }} ref={listRef}>
+            <div className="selection-indicator" style={finalIndicatorStyle} />
+            {sortedKeys.map((key: string) => {
+                const isCollapsed = localCollapsed[key] ?? key.includes('验证完成');
+                const issuesInGroup = groups[key];
+
+                return (
+                    <div key={key}>
+                        <div
+                            className="group-header"
+                            onClick={() => toggleLocalGroup(key)}
+                            style={{
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8,
+                                userSelect: 'none'
+                            }}
+                        >
+                            <span style={{
+                                fontSize: 10,
+                                width: 12,
+                                display: 'inline-block',
+                                transform: isCollapsed ? 'rotate(-90deg)' : 'none',
+                                transition: 'transform 0.2s',
+                                textAlign: 'center'
+                            }}>▼</span>
+                            <span style={{ flex: 1 }}>{key}</span>
+                            <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 'normal' }}>{issuesInGroup.length}</span>
+                        </div>
+
+                        {!isCollapsed && issuesInGroup.map((i: Issue) => (
+                            <MemoIssueItem
+                                key={i.id}
+                                issue={i}
+                                isSelected={localSelectedId === i.id}
+                                onSelect={onLocalSelect}
+                                onUpdateStatus={handleUpdateStatus}
+                                onUpdatePriority={handleUpdatePriority}
+                                onUpdateVersion={handleUpdateVersion}
+                                onUpdateAssignee={handleUpdateAssignee}
+                                statusList={stableStatusList}
+                                priorityList={stablePriorityList}
+                                versionList={stableVersionListCache[i.project?.id || -1] || []}
+                                groupedMembers={stableGroupedMemberCache[i.project?.id || -1] || stableGroupedMemberCache['global']}
+                                isFollowed={vm.followedIssueIds.has(i.id)}
+                                onToggleFollow={async (id: number) => {
+                                    const followed = vm.followedIssueIds.has(id);
+                                    if (followed) {
+                                        await vm.removeWatcher(id, vm.currentUser!.id);
+                                    } else {
+                                        await vm.addWatcher(id, vm.currentUser!.id);
+                                    }
+                                }}
+                            />
+                        ))}
+                    </div>
+                );
+            })}
+        </div>
+    );
+});
+
 const App: React.FC = () => {
     const vm = useAppViewModel();
-    const [selectedIssueId, setSelectedIssueId] = useState<number | null>(null);
+
+    // Derived current tab key
+    const currentTabKey = useMemo(() =>
+        vm.selectedProjectId === -2 ? '-2' :
+            vm.selectedProjectId === -3 ? '-3' :
+                vm.selectedVersionId ? vm.selectedVersionId.toString() :
+                    // Default to project bucket if no version is selected
+                    (vm.selectedProjectId !== null ? `p-${vm.selectedProjectId}` : ''),
+        [vm.selectedProjectId, vm.selectedVersionId]
+    );
+
+    // Track active selection with its source tab to prevent cross-tab auto-selection
+    const [selectedIssueState, setSelectedIssueState] = useState<{ id: number | null, sourceKey: string }>({ id: null, sourceKey: '' });
+    const selectedIssueId = selectedIssueState.id; // derived for compatibility
+
+
 
     // Track which projects are expanded (independent toggle)
     const [expandedProjects, setExpandedProjects] = useState<Record<number, boolean>>(() => {
@@ -253,10 +553,9 @@ const App: React.FC = () => {
         return saved ? JSON.parse(saved) : {};
     });
 
-    // Selection Indicator State
-    const listRef = useRef<HTMLDivElement>(null);
-    const [indicatorStyle, setIndicatorStyle] = useState<React.CSSProperties>({ opacity: 0 });
 
+
+    // Selection Indicator State (Sidebar only now, List indicator moved to IssueListContent)
     const sidebarRef = useRef<HTMLDivElement>(null);
     const [sidebarIndicatorStyle, setSidebarIndicatorStyle] = useState<React.CSSProperties>({ opacity: 0 });
 
@@ -335,60 +634,9 @@ const App: React.FC = () => {
             if (prevGroup && newGroup && prevGroup !== newGroup) {
                 shouldScrollToSelectedRef.current = true;
             }
-            prevGroupedIssuesRef.current = vm.groupedIssues;
         }
+        prevGroupedIssuesRef.current = vm.groupedIssues;
     }, [vm.selectedVersionId, vm.groupedIssues, selectedIssueId]);
-
-    useEffect(() => {
-        if (selectedIssueId === null) {
-            setIndicatorStyle({ opacity: 0 });
-            return;
-        }
-
-        let rafId: number;
-
-        const update = () => {
-            if (!listRef.current) return;
-            const selectedItem = listRef.current.querySelector('.issue-item.selected') as HTMLElement;
-
-            if (selectedItem) {
-                const containerRect = listRef.current.getBoundingClientRect();
-                const itemRect = selectedItem.getBoundingClientRect();
-                const top = itemRect.top - containerRect.top + listRef.current.scrollTop;
-                const height = itemRect.height;
-
-                if (height > 0) {
-                    setIndicatorStyle({
-                        transform: `translateY(${top}px)`,
-                        height,
-                        opacity: 1
-                    });
-
-                    // Scroll to selected item if version just switched
-                    if (shouldScrollToSelectedRef.current) {
-                        shouldScrollToSelectedRef.current = false;
-                        selectedItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    }
-                }
-            } else {
-                setIndicatorStyle({ opacity: 0 });
-            }
-        };
-
-        let count = 0;
-        const sync = () => {
-            update();
-            if (count < 30) { // Increased to 30 to handle longer layout shifts
-                count++;
-                rafId = requestAnimationFrame(sync);
-            }
-        };
-        rafId = requestAnimationFrame(sync);
-
-        return () => {
-            if (rafId) cancelAnimationFrame(rafId);
-        };
-    }, [selectedIssueId, collapsedGroups, windowWidth, listWidth, sidebarWidth, deferredGroupedIssues]); // Updated deps - include deferredGroupedIssues to respond to list reordering
 
     // Track if sidebar indicator has been initialized
     const [sidebarIndicatorInitialized, setSidebarIndicatorInitialized] = useState(false);
@@ -417,18 +665,29 @@ const App: React.FC = () => {
         let count = 0;
         const sync = () => {
             update();
-            if (count < 30) { // Increased to 30
+            if (count < 3) { // Reduced to 3 for better performance
                 count++;
                 requestAnimationFrame(sync);
             }
         };
         requestAnimationFrame(sync);
     }, []);
+    // Optimistic click handler for immediate indicator response
+    const handleSidebarItemClick = useCallback((e: React.MouseEvent<HTMLElement>) => {
+        const target = (e.target as HTMLElement).closest('.sidebar-item') as HTMLElement;
+        if (target) {
+            setSidebarIndicatorStyle({
+                transform: `translate(${target.offsetLeft}px, ${target.offsetTop}px)`,
+                width: target.offsetWidth,
+                height: target.offsetHeight,
+                opacity: 1
+            });
+        }
+    }, []);
 
-    useEffect(() => {
-        const timer = setTimeout(updateSidebarIndicator, 10);
-        return () => clearTimeout(timer);
-    }, [vm.selectedProjectId, vm.selectedVersionId, expandedProjects, vm.projects, vm.projectVersionsMap, vm.activeVersionIds, updateSidebarIndicator, windowWidth, sidebarWidth]);
+    useLayoutEffect(() => {
+        updateSidebarIndicator();
+    }, [expandedProjects, vm.projects, vm.projectVersionsMap, vm.activeVersionIds, updateSidebarIndicator, windowWidth, sidebarWidth]);
 
     useEffect(() => {
         const handleGlobalClick = (e: MouseEvent) => {
@@ -574,7 +833,9 @@ const App: React.FC = () => {
     const handleUpdatePriority = useCallback((id: number, pid: number) => vm.updateIssue(id, { priority_id: pid }), [vm.updateIssue]);
     const handleUpdateVersion = useCallback((id: number, vid: string) => vm.updateIssue(id, { fixed_version_id: vid || '' }), [vm.updateIssue]);
     const handleUpdateAssignee = useCallback((id: number, aid: string) => vm.updateIssue(id, { assigned_to_id: aid || '' }), [vm.updateIssue]);
-    const handleSelectIssue = useCallback((id: number) => setSelectedIssueId(id), []);
+    const handleSelectIssue = useCallback((id: number | null, sourceKey: string = '') => {
+        setSelectedIssueState({ id, sourceKey });
+    }, []);
 
     // Stable references for MemoIssueItem props to prevent unnecessary re-renders
     const stableStatusList = useMemo(() => vm.issueStatuses, [vm.issueStatuses]);
@@ -697,25 +958,37 @@ const App: React.FC = () => {
     }, []);
 
     // Listen for 'open-issue-by-id' from main process (deep linking)
+    // Listen for 'open-issue-by-id' from main process (deep linking)
+    // Use ref to hold the latest handler dependencies to avoid rebinding listener
+    const openIssueByIdDepsRef = useRef({ openIssueById: vm.openIssueById, selectProject: vm.selectProject, selectVersion: vm.selectVersion });
+    useEffect(() => {
+        openIssueByIdDepsRef.current = { openIssueById: vm.openIssueById, selectProject: vm.selectProject, selectVersion: vm.selectVersion };
+    }, [vm.openIssueById, vm.selectProject, vm.selectVersion]);
+
     useEffect(() => {
         const handler = async (_: any, issueId: number) => {
             console.log('[App] Received open-issue-by-id:', issueId);
+            const { openIssueById, selectProject, selectVersion } = openIssueByIdDepsRef.current;
 
             try {
-                const result = await vm.openIssueById(issueId);
+                const result = await openIssueById(issueId);
 
                 if (result) {
                     const { projectId, versionId, issueId: foundIssueId } = result;
 
                     // Switch to the project and version
                     if (versionId) {
-                        vm.selectVersion(projectId, versionId);
+                        selectVersion(projectId, versionId);
                     } else {
-                        vm.selectProject(projectId);
+                        selectProject(projectId);
                     }
 
                     // Select the issue
-                    setSelectedIssueId(foundIssueId);
+                    // Select the issue
+                    // We need to set it globally so the newly active tab picks it up
+                    // Calculate target sourceKey to ensure correct tab picks it up
+                    const targetKey = versionId ? versionId.toString() : (projectId === -2 ? '-2' : projectId === -3 ? '-3' : '');
+                    setSelectedIssueState({ id: foundIssueId, sourceKey: targetKey });
 
                     console.log(`[App] Successfully opened issue #${foundIssueId} in project ${projectId}, version ${versionId}`);
                 }
@@ -728,60 +1001,11 @@ const App: React.FC = () => {
         return () => {
             (window as any).ipcRenderer?.off('open-issue-by-id', handler);
         };
-    }, [vm.openIssueById, vm.selectProject, vm.selectVersion]);
+    }, []);
 
-    // Manage issue selection automatically when context (project/version) changes
-    useEffect(() => {
-        const issues = vm.groupedIssues;
-        const keys = issues.sortedKeys;
-        const allFiltered = keys.flatMap(k => issues.groups[k]);
 
-        // If no issues, clear selection and hide indicator
-        if (allFiltered.length === 0) {
-            setSelectedIssueId(null);
-            setIndicatorStyle({ opacity: 0 });
-            return;
-        }
 
-        // If something is selected, check if it's still valid
-        if (selectedIssueId) {
-            const stillValid = allFiltered.some(i => i.id === selectedIssueId);
-            if (stillValid) return; // All good
-        }
 
-        // If we reach here, either nothing is selected, or the selection is invalid
-        // 1. Try last-selected for this version
-        if (vm.selectedVersionId) {
-            const lastId = versionLastSelectedMap[vm.selectedVersionId];
-            if (lastId && allFiltered.some(i => i.id === lastId)) {
-                setSelectedIssueId(lastId);
-                return;
-            }
-        }
-
-        // 2. Default to the first available issue
-        const firstIssue = allFiltered[0];
-        if (firstIssue) {
-            setSelectedIssueId(firstIssue.id);
-        }
-    }, [vm.selectedProjectId, vm.selectedVersionId, vm.groupedIssues]);
-
-    // Track last selected issue per version
-    const [versionLastSelectedMap, setVersionLastSelectedMap] = useState<Record<number, number>>(() => {
-        const saved = localStorage.getItem('versionLastSelectedMap');
-        return saved ? JSON.parse(saved) : {};
-    });
-
-    // Update last selected map when an issue is selected
-    useEffect(() => {
-        if (selectedIssueId && vm.selectedVersionId) {
-            setVersionLastSelectedMap(prev => {
-                const next = { ...prev, [vm.selectedVersionId!]: selectedIssueId };
-                localStorage.setItem('versionLastSelectedMap', JSON.stringify(next));
-                return next;
-            });
-        }
-    }, [selectedIssueId, vm.selectedVersionId]);
 
 
     // Cache ref for selectedIssue to avoid unnecessary re-renders during background refresh
@@ -1245,7 +1469,9 @@ const App: React.FC = () => {
                                 onClick={async () => {
                                     await vm.deleteIssue(deleteIssueConfirm);
                                     setDeleteIssueConfirm(null);
-                                    setSelectedIssueId(null);
+                                    if (selectedIssueId === deleteIssueConfirm) {
+                                        setSelectedIssueState({ id: null, sourceKey: '' });
+                                    }
                                 }}
                                 style={{ flex: 1, padding: 10, background: '#ff453a', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}
                             >删除</button>
@@ -1267,7 +1493,7 @@ const App: React.FC = () => {
                     <div
                         className={`sidebar-item ${vm.selectedProjectId === -1 ? 'selected' : ''}`}
                         style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 10 }}
-                        onClick={() => vm.selectProject(-1)}
+                        onClick={(e) => { handleSidebarItemClick(e); vm.selectProject(-1); }}
                     >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
                             <rect x="3" y="3" width="7" height="7"></rect>
@@ -1281,7 +1507,7 @@ const App: React.FC = () => {
                     <div
                         className={`sidebar-item ${vm.selectedProjectId === -2 ? 'selected' : ''}`}
                         style={{ marginTop: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-                        onClick={() => vm.selectProject(-2)}
+                        onClick={(e) => { handleSidebarItemClick(e); vm.selectProject(-2); }}
                     >
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
@@ -1300,7 +1526,7 @@ const App: React.FC = () => {
                     <div
                         className={`sidebar-item ${vm.selectedProjectId === -3 ? 'selected' : ''}`}
                         style={{ marginTop: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-                        onClick={() => vm.selectProject(-3)}
+                        onClick={(e) => { handleSidebarItemClick(e); vm.selectProject(-3); }}
                     >
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
@@ -1327,12 +1553,22 @@ const App: React.FC = () => {
                                 <div
                                     className={`sidebar-item ${vm.selectedProjectId === p.id && !vm.selectedVersionId ? 'selected' : ''}`}
                                     style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-                                >
-                                    <span onClick={() => {
-                                        setExpandedProjects(prev => ({ ...prev, [p.id]: !prev[p.id] }));
+                                    onClick={(e) => {
+                                        handleSidebarItemClick(e);
                                         vm.selectProject(p.id);
-                                    }} style={{ flex: 1 }}>
-                                        {expandedProjects[p.id] ? '⌄' : '›'} {p.name}
+                                    }}
+                                >
+                                    <span
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setExpandedProjects(prev => ({ ...prev, [p.id]: !prev[p.id] }));
+                                        }}
+                                        style={{ cursor: 'pointer', paddingRight: 5, width: 15, display: 'inline-block', textAlign: 'center' }}
+                                    >
+                                        {expandedProjects[p.id] ? '⌄' : '›'}
+                                    </span>
+                                    <span style={{ flex: 1 }}>
+                                        {p.name}
                                     </span>
                                     <span
                                         onClick={(e) => { e.stopPropagation(); setNewVersionProjectId(p.id); setNewVersionName(''); }}
@@ -1351,7 +1587,7 @@ const App: React.FC = () => {
                                                 <div
                                                     key={v.id}
                                                     className={`sidebar-item ${vm.selectedVersionId === v.id ? 'selected' : ''}`}
-                                                    onClick={() => vm.selectVersion(p.id, v.id)}
+                                                    onClick={(e) => { handleSidebarItemClick(e); vm.selectVersion(p.id, v.id); }}
                                                     style={{ fontSize: 12, paddingLeft: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
                                                 >
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: 5, flex: 1, minWidth: 0 }}>
@@ -1758,77 +1994,27 @@ const App: React.FC = () => {
                 </div>
 
                 <div
-                    ref={issueListRef}
-                    style={{ overflowY: 'auto', flex: 1, paddingBottom: 20, position: 'relative' }}
+                    style={{ flex: 1, position: 'relative', overflow: 'hidden' }}
                 >
-                    <div className="issue-list-content" ref={listRef}>
-                        {/* Sliding Selection Indicator */}
-                        <div className="selection-indicator" style={indicatorStyle} />
+                    <div className="issue-list-content" style={{ width: '100%', height: '100%' }}>
+                        {/* Render issues using persistent tabs logic */}
 
-                        {/* Render issues - always show deferred data */}
-                        {deferredGroupedIssues.sortedKeys.map(key => {
-                            const isCollapsed = collapsedGroups[key] ?? key.includes('验证完成');
-                            const issuesInGroup = deferredGroupedIssues.groups[key];
-
-                            return (
-                                <div key={key}>
-                                    <div
-                                        className="group-header"
-                                        onClick={() => toggleGroup(key)}
-                                        style={{
-                                            cursor: 'pointer',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: 8,
-                                            userSelect: 'none'
-                                        }}
-                                    >
-                                        <span style={{
-                                            fontSize: 10,
-                                            width: 12,
-                                            display: 'inline-block',
-                                            transform: isCollapsed ? 'rotate(-90deg)' : 'none',
-                                            transition: 'transform 0.2s',
-                                            textAlign: 'center'
-                                        }}>▼</span>
-                                        <span style={{ flex: 1 }}>{key}</span>
-                                        <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 'normal' }}>{issuesInGroup.length}</span>
-                                    </div>
-
-                                    {!isCollapsed && issuesInGroup.map((i: Issue) => (
-                                        <MemoIssueItem
-                                            key={i.id}
-                                            issue={i}
-                                            isSelected={selectedIssueId === i.id}
-                                            onSelect={handleSelectIssue}
-                                            onUpdateStatus={handleUpdateStatus}
-                                            onUpdatePriority={handleUpdatePriority}
-                                            onUpdateVersion={handleUpdateVersion}
-                                            onUpdateAssignee={handleUpdateAssignee}
-                                            statusList={stableStatusList}
-                                            priorityList={stablePriorityList}
-                                            versionList={stableVersionListCache[i.project?.id || -1] || []}
-                                            groupedMembers={stableGroupedMemberCache[i.project?.id || -1] || stableGroupedMemberCache['global']}
-                                            isFollowed={vm.followedIssueIds.has(i.id)}
-                                            onToggleFollow={async (id) => {
-                                                const followed = vm.followedIssueIds.has(id);
-                                                if (followed) {
-                                                    await vm.removeWatcher(id, vm.currentUser!.id);
-                                                } else {
-                                                    await vm.addWatcher(id, vm.currentUser!.id);
-                                                }
-                                            }}
-                                        />
-                                    ))}
-                                </div>
-                            );
-                        })}
-                        {deferredGroupedIssues.sortedKeys.length === 0 && !vm.isLoading && (
-                            <div style={{ textAlign: 'center', marginTop: 50, color: 'var(--text-secondary)', fontSize: 13 }}>
-                                该项当前下未发现任务。<br />
-                                <button onClick={() => vm.refreshData()} style={{ marginTop: 10, background: 'none', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '5px 15px', borderRadius: 4, cursor: 'pointer' }}>强制刷新</button>
-                            </div>
-                        )}
+                        <TabbedIssueList
+                            currentKey={currentTabKey}
+                            versionViewData={vm.versionViewData}
+                            vm={vm}
+                            // Passing props needed for rendering items
+                            selectedIssueState={selectedIssueState}
+                            handleSelectIssue={handleSelectIssue}
+                            handleUpdateStatus={handleUpdateStatus}
+                            handleUpdatePriority={handleUpdatePriority}
+                            handleUpdateVersion={handleUpdateVersion}
+                            handleUpdateAssignee={handleUpdateAssignee}
+                            stableStatusList={stableStatusList}
+                            stablePriorityList={stablePriorityList}
+                            stableVersionListCache={stableVersionListCache}
+                            stableGroupedMemberCache={stableGroupedMemberCache}
+                        />
                     </div>
                 </div>
 

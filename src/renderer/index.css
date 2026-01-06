@@ -191,8 +191,8 @@ body {
   pointer-events: none;
   border-radius: 8px;
   background: var(--accent-color);
-  /* Performance: use transform for animation */
-  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), width 0.25s, height 0.25s, opacity 0.15s;
+  /* Performance: instant switch, no animation */
+  transition: none;
   will-change: transform;
   z-index: 1;
 }
@@ -263,8 +263,8 @@ body {
   border-radius: 12px;
   border: 1.5px solid var(--accent-color);
   background: rgba(12, 102, 255, 0.05);
-  /* Performance: simplified styles, faster animation */
-  transition: transform 0.15s ease-out, height 0.15s ease-out, opacity 0.1s;
+  /* Performance: instant switch, no animation */
+  transition: none;
   will-change: transform;
   z-index: 1;
 }
