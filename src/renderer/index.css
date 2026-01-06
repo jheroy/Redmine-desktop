@@ -431,6 +431,8 @@ body {
   align-items: center;
   justify-content: center;
   z-index: 10000;
+  will-change: opacity;
+  transform: translateZ(0);
 }
 
 .image-lightbox-content {
@@ -439,6 +441,52 @@ body {
   object-fit: contain;
   box-shadow: 0 40px 100px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.1);
   border-radius: 12px;
+  will-change: transform;
+  transform: translateZ(0);
+}
+
+.image-lightbox-controls {
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%) translateZ(0);
+  display: flex;
+  gap: 12px;
+  padding: 12px 20px;
+  background: rgba(0, 0, 0, 0.9);
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  z-index: 10001;
+  will-change: transform;
+}
+
+.image-lightbox-controls button {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #ffffff !important;
+  padding: 10px 16px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 500;
+  min-width: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  pointer-events: auto;
+  will-change: background-color, border-color;
+}
+
+.image-lightbox-controls button:hover {
+  background: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.image-lightbox-controls button:active {
+  background: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.5);
 }
 
 @keyframes spin {

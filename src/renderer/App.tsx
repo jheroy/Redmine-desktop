@@ -732,6 +732,26 @@ const App: React.FC = () => {
     const [isDragging, setIsDragging] = useState(false);
     const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
 
+    // Lightbox control handlers - memoized for performance
+    const handleLightboxShrink = useCallback(() => {
+        setLightboxScale(s => Math.max(0.25, s - 0.25));
+    }, []);
+
+    const handleLightboxReset = useCallback(() => {
+        setLightboxScale(1);
+        setLightboxOffset({ x: 0, y: 0 });
+    }, []);
+
+    const handleLightboxEnlarge = useCallback(() => {
+        setLightboxScale(s => Math.min(4, s + 0.25));
+    }, []);
+
+    const handleLightboxClose = useCallback(() => {
+        setLightboxImage(null);
+        setLightboxOffset({ x: 0, y: 0 });
+        setLightboxScale(1);
+    }, []);
+
     // Calculate actual list width from ratio (Moved up)
 
 
@@ -1099,7 +1119,7 @@ const App: React.FC = () => {
         }
     }, [selectedIssue]);
 
-    // Lightbox keyboard and wheel handlers
+    // Lightbox keyboard handlers
     useEffect(() => {
         if (!lightboxImage) return;
 
@@ -1127,21 +1147,10 @@ const App: React.FC = () => {
             }
         };
 
-        const handleWheel = (e: WheelEvent) => {
-            e.preventDefault();
-            if (e.deltaY < 0) {
-                setLightboxScale(s => Math.min(4, s + 0.1));
-            } else {
-                setLightboxScale(s => Math.max(0.25, s - 0.1));
-            }
-        };
-
         window.addEventListener('keydown', handleKeyDown);
-        window.addEventListener('wheel', handleWheel, { passive: false });
 
         return () => {
             window.removeEventListener('keydown', handleKeyDown);
-            window.removeEventListener('wheel', handleWheel);
         };
     }, [lightboxImage]);
 
@@ -2564,37 +2573,61 @@ const App: React.FC = () => {
             {/* Modals & Overlays */}
             {
                 lightboxImage && (
-                    <div className="image-lightbox-overlay" onClick={() => { setLightboxImage(null); setLightboxOffset({ x: 0, y: 0 }); setLightboxScale(1); }}
+                    <div
+                        className="image-lightbox-overlay"
+                        onClick={handleLightboxClose}
+                        onWheel={(e) => {
+                            e.preventDefault();
+                            const delta = e.deltaY;
+                            if (delta < 0) {
+                                setLightboxScale(s => Math.min(4, s + 0.1));
+                            } else {
+                                setLightboxScale(s => Math.max(0.25, s - 0.1));
+                            }
+                        }}
                         onMouseMove={(e) => {
                             if (isDragging) {
-                                setLightboxOffset(o => ({
-                                    x: o.x + e.movementX,
-                                    y: o.y + e.movementY
-                                }));
+                                setLightboxOffset({
+                                    x: e.clientX - dragStart.x,
+                                    y: e.clientY - dragStart.y
+                                });
                             }
                         }}
                         onMouseUp={() => setIsDragging(false)}
                         onMouseLeave={() => setIsDragging(false)}
                     >
-                        <AuthenticatedImage
-                            src={lightboxImage}
-                            alt="Enlarged"
-                            fetchBlob={(u) => vm.fetchImageBlob(u)}
-                            className="image-lightbox-content"
+                        <div
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setIsDragging(true);
+                                setDragStart({ x: e.clientX - lightboxOffset.x, y: e.clientY - lightboxOffset.y });
+                            }}
                             style={{
-                                transform: `translate(${lightboxOffset.x}px, ${lightboxOffset.y}px) scale(${lightboxScale})`,
                                 cursor: isDragging ? 'grabbing' : 'grab',
                                 userSelect: 'none',
-                                pointerEvents: 'auto'
+                                display: 'inline-block',
+                                transform: `translate(${lightboxOffset.x}px, ${lightboxOffset.y}px) scale(${lightboxScale})`,
+                                transformOrigin: 'center center'
                             }}
-                            onClick={(e) => e.stopPropagation()}
-                            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); }}
-                        />
+                        >
+                            <AuthenticatedImage
+                                src={lightboxImage}
+                                alt="Enlarged"
+                                fetchBlob={(u) => vm.fetchImageBlob(u)}
+                                className="image-lightbox-content"
+                                style={{
+                                    pointerEvents: 'none',
+                                    display: 'block'
+                                }}
+                            />
+                        </div>
                         <div className="image-lightbox-controls" onClick={e => e.stopPropagation()}>
-                            <button onClick={() => setLightboxScale(s => Math.max(0.25, s - 0.25))}>➖</button>
-                            <button onClick={() => { setLightboxScale(1); setLightboxOffset({ x: 0, y: 0 }); }}>重置</button>
-                            <button onClick={() => setLightboxScale(s => Math.min(4, s + 0.25))}>➕</button>
-                            <button onClick={() => { setLightboxImage(null); setLightboxOffset({ x: 0, y: 0 }); setLightboxScale(1); }}>✕</button>
+                            <button onClick={handleLightboxShrink}>−</button>
+                            <button onClick={handleLightboxReset}>○</button>
+                            <button onClick={handleLightboxEnlarge}>+</button>
+                            <button onClick={handleLightboxClose}>✕</button>
                         </div>
                     </div>
                 )
